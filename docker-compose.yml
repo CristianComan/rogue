@@ -1,0 +1,93 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rogue}
+      POSTGRES_USER: ${POSTGRES_USER:-rogue}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rogue_dev_only}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rogue} -d ${POSTGRES_DB:-rogue}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-m", "8222", "--store_dir", "/data"]
+    ports:
+      - "${NATS_PORT:-4222}:4222"
+      - "${NATS_MONITOR_PORT:-8222}:8222"
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-rogue}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-rogue_dev_password}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set rogue http://minio:9000
+      ${MINIO_ROOT_USER:-rogue}
+      ${MINIO_ROOT_PASSWORD:-rogue_dev_password}; do sleep 2; done;
+      mc mb --ignore-existing rogue/${MINIO_BUCKET:-rogue};
+      exit 0;
+      "
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      ROGUE_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-rogue}:${POSTGRES_PASSWORD:-rogue_dev_only}@postgres:5432/${POSTGRES_DB:-rogue}
+      ROGUE_NATS_URL: nats://nats:4222
+      ROGUE_S3_ENDPOINT: http://minio:9000
+      ROGUE_S3_BUCKET: ${MINIO_BUCKET:-rogue}
+      ROGUE_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-rogue}
+      ROGUE_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-rogue_dev_password}
+    ports:
+      - "${ROGUE_API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
+  simulated-agent:
+    build:
+      context: .
+      dockerfile: agents/Dockerfile
+    environment:
+      ROGUE_NATS_URL: nats://nats:4222
+      ROGUE_AGENT_ID: sim-agent-01
+      ROGUE_AGENT_MODE: simulated
+    depends_on:
+      nats:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  minio-data:
+  nats-data:
