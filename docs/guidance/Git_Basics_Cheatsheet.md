@@ -174,6 +174,77 @@ sudo netbird down && sudo netbird up   # restart it if not
 This isn't a git problem — once DNS/NetBird is healthy again, the SSH
 setup above needs no further changes.
 
+## GitHub CLI (`gh`) — one-time setup
+
+`gh` lets you open/manage PRs from the terminal (`gh pr create`, `gh pr
+view`, etc.) instead of switching to the browser. One-time login:
+
+```bash
+gh auth login
+```
+
+It'll walk you through a few prompts:
+
+- **What account?** → GitHub.com
+- **Preferred protocol for Git operations?** → SSH (matches the remote
+  setup you already did)
+- **Upload your SSH public key to your GitHub account?** → if the key
+  is already registered on GitHub (as yours was), `gh` detects that and
+  reuses it — you'll see `✓ SSH key already existed on your GitHub
+  account` rather than a duplicate being created.
+- **How would you like to authenticate?** → two options here:
+  - *Login with a web browser* — simplest when it works, but it needs a
+    live connection to `github.com` at that moment; on a flaky
+    connection it can fail with `error connecting to github.com`.
+  - *Paste an authentication token* — generate one at
+    https://github.com/settings/tokens with at least the `repo`,
+    `read:org`, and `admin:public_key` scopes, then paste it in. More
+    reliable if the browser method fails, since it's a single request
+    rather than an interactive browser round-trip.
+
+Verify it worked:
+
+```bash
+gh auth status
+```
+
+### "error connecting to github.com" / "error connecting to api.github.com"
+
+Same underlying cause as the SSH DNS issue above — `gh` talks to
+`api.github.com`, a different hostname than `git` uses
+(`github.com`/`ssh.github.com`), so a DNS/NetBird hiccup can break one
+without the other, or break both intermittently (authenticating fine on
+one attempt, then `gh pr create` failing minutes later on the same
+issue). It doesn't mean the login didn't work — just retry the failing
+command once the connection is stable:
+
+```bash
+getent hosts api.github.com     # confirm this specific host resolves
+netbird status                  # same check as before
+gh pr create --base develop --title "..." --fill    # just retry
+```
+
+If it's still failing and you need the PR open right now, use the web
+UI instead — `https://github.com/<owner>/<repo>/compare/develop...<branch>`
+— it doesn't depend on `gh`'s connection at all.
+
+**If this keeps happening specifically to `api.github.com`** (not
+`github.com` or `ssh.github.com`), don't keep retrying `gh` — `git push`
+over SSH and `gh`'s API calls use genuinely different network paths
+(SSH to `github.com`/`ssh.github.com` vs. HTTPS to `api.github.com`),
+so it's possible for one to work reliably while the other stays broken
+on a given network/VPN. Confirm with a plain request that bypasses `gh`
+entirely:
+
+```bash
+curl -v https://api.github.com/zen
+```
+
+If that also fails or hangs, it's a network path problem, not
+something fixable by re-authenticating `gh`. Default to the web-UI PR
+link above until it's resolved — it costs nothing and doesn't depend on
+whichever path is currently blocked.
+
 ## Checks to run periodically (not just when something breaks)
 
 **Before you start working each session:**

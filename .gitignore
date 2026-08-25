@@ -30,6 +30,7 @@ pnpm-debug.log*
 Thumbs.db
 *.swp
 *.swo
+docs/guidance/git_token.txt
 
 # --- Environment / secrets ---
 .env
