@@ -39,6 +39,8 @@ Thumbs.db
 *.key
 *.p12
 *.pfx
+*_token.txt
+docs/guidance/git_token.txt
 
 # --- Logs / runtime ---
 *.log
