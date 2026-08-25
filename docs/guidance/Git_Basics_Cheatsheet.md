@@ -87,6 +87,93 @@ git pull
 git branch -d feature/short-description
 ```
 
+## SSH access to GitHub (one-time setup)
+
+HTTPS pushes need a Personal Access Token every time (GitHub no longer
+accepts your account password for git operations) — SSH with a
+registered key avoids that entirely. If you already have a key added
+to your GitHub account (Settings → SSH and GPG keys), do this once per
+machine:
+
+```bash
+# 1. Confirm the private key exists locally and find which file it is
+ls -la ~/.ssh/
+ssh-keygen -lf ~/.ssh/id_ed25519.pub    # compare fingerprint to the one shown on GitHub
+
+# 2. Make sure ssh-agent has it loaded
+eval "$(ssh-agent -s)"
+ssh-add ~/.ssh/id_ed25519
+
+# 3. Test the connection directly, before touching git config
+ssh -T git@github.com
+# expect: "Hi <username>! You've successfully authenticated, but GitHub does not provide shell access."
+
+# 4. Point this repo's remote at SSH instead of HTTPS
+git remote set-url origin git@github.com:CristianComan/rogue.git
+git remote -v          # both lines should now read git@github.com:...
+
+# 5. Push — no username/password prompt this time
+git push -u origin develop
+```
+
+After this one-time setup, every `git push`/`git pull` on this repo
+authenticates via the key automatically.
+
+### If a push hangs after "Resolving deltas... completed"
+
+This means your data already reached GitHub (object transfer and delta
+resolution both finished) — only the final handshake is stuck, usually
+because something between your machine and GitHub is interfering with
+port 22 (VPNs, hotel/corporate wifi, deep packet inspection). Check
+whether it actually landed from a second terminal:
+
+```bash
+git ls-remote origin develop   # returns a commit hash if the push succeeded
+```
+
+If it's genuinely stuck, `Ctrl+C` and switch git's SSH traffic to
+GitHub's port-443 endpoint, which routes around most port-22
+interference, plus add keepalives so a future stall fails fast instead
+of hanging forever:
+
+```bash
+cat >> ~/.ssh/config <<'EOF'
+
+Host github.com
+  Hostname ssh.github.com
+  Port 443
+  User git
+  ServerAliveInterval 15
+  ServerAliveCountMax 3
+EOF
+
+ssh -T git@github.com
+git push -u origin develop
+```
+
+`git remote -v` doesn't need to change for this — it still reads
+`git@github.com:...`; the SSH config transparently redirects the
+connection underneath.
+
+### If you instead get "Could not resolve hostname github.com"
+
+That's DNS failing, not GitHub or git — your machine can't look up the
+address at all, for any hostname including the port-443 alias above.
+On this machine that's most likely the NetBird VPN client (referenced
+in `/etc/ssh/ssh_config.d/99-netbird.conf`) — if its background service
+isn't running or has lost its connection, it can leave DNS resolution
+broken system-wide. Quick checks:
+
+```bash
+getent hosts github.com        # does DNS resolve anything at all?
+cat /etc/resolv.conf            # what resolver is configured?
+netbird status                  # is the NetBird daemon actually connected?
+sudo netbird down && sudo netbird up   # restart it if not
+```
+
+This isn't a git problem — once DNS/NetBird is healthy again, the SSH
+setup above needs no further changes.
+
 ## Checks to run periodically (not just when something breaks)
 
 **Before you start working each session:**
