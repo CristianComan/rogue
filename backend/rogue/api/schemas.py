@@ -1,0 +1,68 @@
+"""Thin request DTOs for the scenario API.
+
+These omit server-assigned fields (id, timestamps, revision, ...) that the
+full `rogue.domain` aggregates require; route handlers fill those in before
+constructing a domain object. Responses reuse the domain models directly —
+they're already Pydantic v2 and already the canonical shape.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from rogue.domain.common import GeoPolygon
+from rogue.domain.mission import DroneMission
+from rogue.domain.receiver import Receiver
+from rogue.domain.recording import RecordingReference
+from rogue.domain.scenario import Zone
+from rogue.domain.timeline import TimelineEvent
+
+
+class ScenarioCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    owner: str
+    tags: list[str] = Field(default_factory=list)
+    coordinate_system: str = "EPSG:4326"
+    area_of_operation: GeoPolygon
+    variables: dict[str, Any] = Field(default_factory=dict)
+
+
+class DraftContent(BaseModel):
+    """Content fields shared by draft-create and draft-update requests."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    author: str
+    zones: list[Zone] = Field(default_factory=list)
+    missions: list[DroneMission] = Field(default_factory=list)
+    receivers: list[Receiver] = Field(default_factory=list)
+    timeline_events: list[TimelineEvent] = Field(default_factory=list)
+    recordings: list[RecordingReference] = Field(default_factory=list)
+
+
+class DraftCreateRequest(DraftContent):
+    base_version_id: UUID | None = None
+
+
+class DraftUpdateRequest(DraftContent):
+    expected_revision: int = Field(ge=0)
+
+
+class CloneRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    owner: str
+    source_version_number: int | None = None
+
+
+class CloneResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scenario_id: UUID
+    draft_id: UUID
