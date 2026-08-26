@@ -40,6 +40,7 @@ dev = [
   "ruff>=0.6,<1.0",
   "mypy>=1.11,<2.0",
   "types-PyYAML>=6.0,<7.0",
+  "types-shapely>=2.0,<3.0",
   "pre-commit>=3.8,<5.0"
 ]
 
@@ -55,6 +56,9 @@ addopts = "-ra --strict-markers"
 target-version = "py312"
 line-length = 100
 src = ["backend", "agents", "tests"]
+# Alembic autogenerates these; hand-formatting them fights every future
+# `alembic revision --autogenerate` run. env.py is hand-written and stays linted.
+extend-exclude = ["backend/rogue/db/migrations/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
@@ -69,6 +73,7 @@ strict = true
 warn_unused_configs = true
 plugins = ["pydantic.mypy"]
 mypy_path = ["backend", "agents"]
+exclude = ["backend/rogue/db/migrations/versions"]
 
 [[tool.mypy.overrides]]
 module = ["boto3.*", "geoalchemy2.*", "nats.*"]
