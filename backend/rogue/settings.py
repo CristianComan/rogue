@@ -1,10 +1,7 @@
 """Runtime configuration for the ROGUE control-plane API.
 
 Values are sourced from environment variables (see docker-compose.yml,
-which sets the ROGUE_* variables consumed here). Only the settings
-needed to boot the M0 health-check shell are exercised today; nothing
-in this module reads the database/broker/storage values yet — that
-begins with M2 (scenario persistence/API).
+which sets the ROGUE_* variables consumed here).
 """
 
 from __future__ import annotations
@@ -23,6 +20,9 @@ class Settings(BaseSettings):
     s3_bucket: str = "rogue"
     s3_access_key: str = "rogue"
     s3_secret_key: str = "rogue_dev_password"
+    # M3's Vite dev server origin. Comma-separated for other environments,
+    # e.g. ROGUE_CORS_ALLOWED_ORIGINS="http://localhost:5173,https://lab.example".
+    cors_allowed_origins: list[str] = ["http://localhost:5173"]
 
 
 settings = Settings()
