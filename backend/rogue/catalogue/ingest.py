@@ -22,9 +22,55 @@ import hashlib
 from uuid import UUID, uuid4
 
 from rogue.catalogue.sigmf import bytes_per_sample, parse_metadata
-from rogue.domain.recording import AccessClassification, IQRecording
+from rogue.catalogue.spectrogram import compute_overview_spectrogram
+from rogue.domain.recording import (
+    AccessClassification,
+    IQRecording,
+    RecordingKind,
+    SpectrogramOverview,
+)
 from rogue.domain.validation import ValidationFinding, ValidationSeverity
 from rogue.storage import object_store
+
+# A small, fixed number of short FFT windows spread across the recording —
+# see catalogue/spectrogram.py's module docstring for why this is sparse
+# sampling rather than a continuous STFT of every sample.
+_OVERVIEW_TIME_BINS = 150
+_OVERVIEW_FFT_SIZE = 256
+
+
+def _build_overview(
+    *,
+    data_object_key: str,
+    sample_format: str,
+    sample_rate_hz: float,
+    sample_count: int,
+    num_channels: int,
+    per_sample_bytes: int,
+) -> SpectrogramOverview | None:
+    """Best-effort whole-recording overview; ``None`` if it can't be built.
+
+    Only supports single-channel recordings — deinterleaving multi-channel
+    SigMF data isn't implemented elsewhere in the catalogue either, so this
+    stays honest about that rather than silently computing something wrong.
+    """
+    if num_channels != 1 or sample_count < _OVERVIEW_FFT_SIZE:
+        return None
+
+    anchor_samples = [
+        int(i * (sample_count - _OVERVIEW_FFT_SIZE) / max(1, _OVERVIEW_TIME_BINS - 1))
+        for i in range(_OVERVIEW_TIME_BINS)
+    ]
+    chunks = [
+        object_store.get_object_range(
+            data_object_key, anchor * per_sample_bytes, _OVERVIEW_FFT_SIZE * per_sample_bytes
+        )
+        for anchor in anchor_samples
+    ]
+    time_offsets_s = [anchor / sample_rate_hz for anchor in anchor_samples]
+    return compute_overview_spectrogram(
+        chunks, time_offsets_s, sample_format, sample_rate_hz, fft_size=_OVERVIEW_FFT_SIZE
+    )
 
 
 def _finding(
@@ -44,6 +90,7 @@ def build_ingest_candidate(
     allowed_use_constraints: list[str],
     allowed_frequency_min_hz: float | None,
     allowed_frequency_max_hz: float | None,
+    kind: RecordingKind = RecordingKind.SIGNAL,
 ) -> tuple[IQRecording | None, list[ValidationFinding]]:
     """Fetch, parse and validate a SigMF asset pair.
 
@@ -150,6 +197,28 @@ def build_ingest_candidate(
         return None, findings
 
     assert parsed.sample_rate_hz is not None  # guaranteed: no BLOCKING findings above
+    per_sample = bytes_per_sample(parsed.sample_format)
+    assert per_sample is not None
+    try:
+        overview = _build_overview(
+            data_object_key=data_object_key,
+            sample_format=parsed.sample_format,
+            sample_rate_hz=parsed.sample_rate_hz,
+            sample_count=sample_count,
+            num_channels=parsed.num_channels,
+            per_sample_bytes=per_sample,
+        )
+    except Exception as exc:  # noqa: BLE001 - a failed preview must not block ingest
+        overview = None
+        findings.append(
+            _finding(
+                ValidationSeverity.WARNING,
+                "spectrogram_overview_unavailable",
+                f"could not compute a spectrogram overview: {exc}",
+                "data_object_key",
+            )
+        )
+
     candidate = IQRecording(
         id=recording_id if recording_id is not None else uuid4(),
         version=version,
@@ -162,6 +231,8 @@ def build_ingest_candidate(
         sample_count=sample_count,
         duration_s=duration_s,
         center_frequency_hz=parsed.center_frequency_hz,
+        kind=kind,
+        overview_spectrogram=overview,
         provenance=provenance,
         access_classification=access_classification,
         allowed_use_constraints=allowed_use_constraints,

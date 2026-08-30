@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import numpy as np
 
-from rogue.catalogue.spectrogram import compute_spectrogram, decode_iq_samples
+from rogue.catalogue.spectrogram import (
+    compute_overview_spectrogram,
+    compute_spectrogram,
+    decode_iq_samples,
+)
 
 
 def test_decode_cf32_le_round_trips_known_values() -> None:
@@ -51,3 +55,31 @@ def test_compute_spectrogram_shrinks_fft_size_below_sample_count() -> None:
     samples = np.exp(2j * np.pi * 0.1 * np.arange(64))
     result = compute_spectrogram(samples, 1_000_000.0, fft_size=1024)
     assert len(result.freq_offsets_hz) == 64
+
+
+def test_compute_overview_spectrogram_one_row_per_chunk() -> None:
+    sample_rate_hz = 1_000_000.0
+    fft_size = 64
+    chunks = [
+        np.exp(2j * np.pi * 100_000.0 * np.arange(fft_size) / sample_rate_hz)
+        .astype(np.complex64)
+        .view(np.float32)
+        .tobytes()
+        for _ in range(3)
+    ]
+    time_offsets_s = [0.0, 1.0, 2.0]
+
+    overview = compute_overview_spectrogram(
+        chunks, time_offsets_s, "cf32_le", sample_rate_hz, fft_size=fft_size
+    )
+
+    assert overview.time_offsets_s == time_offsets_s
+    assert len(overview.magnitude_db) == 3
+    assert len(overview.freq_offsets_hz) == fft_size
+
+
+def test_compute_overview_spectrogram_empty_chunks_returns_empty() -> None:
+    overview = compute_overview_spectrogram([], [], "cf32_le", 1_000_000.0)
+    assert overview.time_offsets_s == []
+    assert overview.freq_offsets_hz == []
+    assert overview.magnitude_db == []

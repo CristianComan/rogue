@@ -64,6 +64,16 @@ def test_ingest_recording_returns_recording_and_empty_findings(client: TestClien
     assert result["recording"]["sample_count"] == 100
 
 
+def test_ingest_defaults_to_signal_kind(client: TestClient) -> None:
+    result = _ingest(client)
+    assert result["recording"]["kind"] == "signal"
+
+
+def test_ingest_can_register_a_background_recording(client: TestClient) -> None:
+    result = _ingest(client, kind="background")
+    assert result["recording"]["kind"] == "background"
+
+
 def test_ingest_and_get_recording(client: TestClient) -> None:
     ingested = _ingest(client)["recording"]
 
@@ -151,73 +161,7 @@ def test_get_missing_version_is_404(client: TestClient) -> None:
     assert response.status_code == 404
 
 
-def test_spectrogram_returns_valid_shape(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(object_store, "get_object_range", lambda key, offset, length: DATA_BYTES)
+def test_recording_without_enough_samples_has_no_overview(client: TestClient) -> None:
+    # DATA_BYTES is only 100 samples; the overview needs at least 256.
     ingested = _ingest(client)["recording"]
-
-    response = client.get(f"/recordings/{ingested['id']}/spectrogram")
-
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert len(body["time_offsets_s"]) == 1
-    assert len(body["freq_offsets_hz"]) == 100
-    assert len(body["magnitude_db"]) == 1
-    assert len(body["magnitude_db"][0]) == 100
-
-
-def test_spectrogram_of_missing_recording_is_404(client: TestClient) -> None:
-    response = client.get(
-        "/recordings/00000000-0000-4000-8000-000000000000/spectrogram"
-    )
-    assert response.status_code == 404
-
-
-def test_spectrogram_window_start_beyond_duration_is_422(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(object_store, "get_object_range", lambda key, offset, length: DATA_BYTES)
-    ingested = _ingest(client)["recording"]
-
-    response = client.get(
-        f"/recordings/{ingested['id']}/spectrogram", params={"window_start_s": 999.0}
-    )
-
-    assert response.status_code == 422
-
-
-def test_spectrogram_window_duration_above_cap_is_422(client: TestClient) -> None:
-    ingested = _ingest(client)["recording"]
-
-    response = client.get(
-        f"/recordings/{ingested['id']}/spectrogram", params={"window_duration_s": 20.0}
-    )
-
-    assert response.status_code == 422
-
-
-def test_spectrogram_requests_bounded_byte_range(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The endpoint must range-read only the requested window, never the full object."""
-    captured: dict[str, object] = {}
-
-    def _fake_range(key: str, offset: int, length: int) -> bytes:
-        captured["offset"] = offset
-        captured["length"] = length
-        return DATA_BYTES[offset : offset + length]
-
-    monkeypatch.setattr(object_store, "get_object_range", _fake_range)
-    ingested = _ingest(client)["recording"]
-
-    # 100 samples at 1_000_000 Hz cf32_le (8 bytes/sample) = 800 bytes total.
-    # Ask for a 50-sample window starting at sample 10.
-    response = client.get(
-        f"/recordings/{ingested['id']}/spectrogram",
-        params={"window_start_s": 10 / 1_000_000, "window_duration_s": 50 / 1_000_000},
-    )
-
-    assert response.status_code == 200, response.text
-    assert captured["offset"] == 10 * 8
-    assert captured["length"] == 50 * 8
+    assert ingested["overview_spectrogram"] is None

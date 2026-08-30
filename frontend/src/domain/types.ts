@@ -133,6 +133,19 @@ export type AccessClassification = "public" | "restricted" | "controlled";
 // mirrors backend/rogue/domain/recording.py:RecordingKind
 export type RecordingKind = "signal" | "background";
 
+// mirrors backend/rogue/domain/recording.py:SpectrogramOverview — a coarse,
+// whole-recording time/frequency dB preview computed once at ingest (sparse
+// FFT samples spread across the recording, not a continuous STFT — a live
+// STFT over a real recording's sample rate is far too much data per
+// request). Frequency bins are baseband-centered on the recording's own
+// capture frequency, not any scenario RfLink's live authored frequency;
+// Waterfall.tsx re-centers for display.
+export interface SpectrogramOverview {
+  time_offsets_s: number[];
+  freq_offsets_hz: number[];
+  magnitude_db: number[][];
+}
+
 // mirrors backend/rogue/domain/recording.py:IQRecording — the M4 catalogue
 // entry shape returned by GET /recordings (src/api/recordings.ts). Not the
 // same thing as RecordingReference above, which is just an
@@ -150,6 +163,7 @@ export interface IQRecording {
   duration_s: number;
   center_frequency_hz: number | null;
   kind: RecordingKind;
+  overview_spectrogram: SpectrogramOverview | null;
   provenance: string | null;
   access_classification: AccessClassification;
   allowed_use_constraints: string[];
@@ -202,16 +216,6 @@ export type TimingSyncClass =
   | "l2_scheduled_local"
   | "l3_shared_reference"
   | "l4_measured";
-
-// mirrors backend/rogue/api/schemas.py:SpectrogramResponse — GET
-// /recordings/{id}/spectrogram (src/api/recordings.ts). Frequency bins are
-// baseband-centered on the recording's own capture frequency, not any
-// scenario RfLink's live authored frequency; Waterfall.tsx re-centers.
-export interface SpectrogramResponse {
-  time_offsets_s: number[];
-  freq_offsets_hz: number[];
-  magnitude_db: number[][];
-}
 
 // mirrors backend/rogue/domain/rf.py:ResourcePreference
 export interface ResourcePreference {

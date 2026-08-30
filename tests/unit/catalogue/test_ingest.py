@@ -186,6 +186,56 @@ def test_extra_sigmf_fields_are_preserved_on_candidate(monkeypatch: pytest.Monke
     assert candidate.extra_sigmf_fields["global"]["vendor:custom_field"] == 7
 
 
+def test_small_recording_has_no_overview(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 100 samples is below the overview's minimum FFT size (256).
+    _patch_store(monkeypatch, metadata=_metadata_bytes(), data=b"\x00" * 800)
+
+    candidate, _findings = ingest_module.build_ingest_candidate(**_base_kwargs())
+
+    assert candidate is not None
+    assert candidate.overview_spectrogram is None
+
+
+def test_large_recording_gets_a_spectrogram_overview(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 1000 samples (cf32_le, 8 bytes/sample) — enough for the 256-sample overview FFT.
+    data = b"\x00" * (1000 * 8)
+    _patch_store(monkeypatch, metadata=_metadata_bytes(), data=data)
+
+    def _range(key: str, offset: int, length: int) -> bytes:
+        return data[offset : offset + length]
+
+    monkeypatch.setattr(object_store, "get_object_range", _range)
+
+    candidate, findings = ingest_module.build_ingest_candidate(**_base_kwargs())
+
+    assert candidate is not None
+    assert not any(f.code == "spectrogram_overview_unavailable" for f in findings)
+    overview = candidate.overview_spectrogram
+    assert overview is not None
+    assert len(overview.time_offsets_s) == 150
+    assert len(overview.magnitude_db) == 150
+    assert len(overview.freq_offsets_hz) == 256
+
+
+def test_overview_compute_failure_is_a_warning_not_blocking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data = b"\x00" * (1000 * 8)
+    _patch_store(monkeypatch, metadata=_metadata_bytes(), data=data)
+
+    def _raise(key: str, offset: int, length: int) -> bytes:
+        raise RuntimeError("storage unavailable")
+
+    monkeypatch.setattr(object_store, "get_object_range", _raise)
+
+    candidate, findings = ingest_module.build_ingest_candidate(**_base_kwargs())
+
+    assert candidate is not None
+    assert candidate.overview_spectrogram is None
+    warning = next(f for f in findings if f.code == "spectrogram_overview_unavailable")
+    assert warning.severity == ValidationSeverity.WARNING
+
+
 def test_explicit_recording_id_and_version_are_used(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_store(monkeypatch, metadata=_metadata_bytes(), data=b"\x00" * 8)
     fixed_id = uuid4()

@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from rogue.domain.common import GeoPolygon
 from rogue.domain.mission import DroneMission
 from rogue.domain.receiver import Receiver
-from rogue.domain.recording import AccessClassification, RecordingReference
+from rogue.domain.recording import AccessClassification, RecordingKind, RecordingReference
 from rogue.domain.scenario import Zone
 from rogue.domain.timeline import TimelineEvent
 
@@ -89,22 +89,8 @@ class RecordingIngestRequest(BaseModel):
     metadata_object_key: str
     data_object_key: str
     provenance: str | None = None
+    kind: RecordingKind = RecordingKind.SIGNAL
     access_classification: AccessClassification = AccessClassification.RESTRICTED
     allowed_use_constraints: list[str] = Field(default_factory=list)
     allowed_frequency_min_hz: float | None = None
     allowed_frequency_max_hz: float | None = None
-
-
-class SpectrogramResponse(BaseModel):
-    """A bounded time/frequency dB preview of a recording's I/Q content.
-
-    Frequency bins are baseband-centered (0 Hz = the recording's own
-    ``center_frequency_hz``, not any scenario RfLink's live authored
-    frequency) — the caller re-centers for display.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    time_offsets_s: list[float]
-    freq_offsets_hz: list[float]
-    magnitude_db: list[list[float]]

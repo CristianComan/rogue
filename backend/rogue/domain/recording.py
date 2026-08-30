@@ -46,6 +46,22 @@ class RecordingReference(RogueModel):
     note: str | None = None
 
 
+class SpectrogramOverview(RogueModel):
+    """A coarse, whole-recording time/frequency dB preview, computed once at ingest.
+
+    Sparsely sampled (a small, fixed number of short FFT windows spread
+    across the recording), not a continuous STFT of every sample — a full
+    live STFT over a real recording's sample rate is prohibitively large to
+    compute per request (see catalogue/spectrogram.py's module docstring for
+    the measurement that drove this). Good enough for a scrubbing preview;
+    not a compiled/conflict-checked plan.
+    """
+
+    time_offsets_s: list[float]
+    freq_offsets_hz: list[float]
+    magnitude_db: list[list[float]]
+
+
 class IQRecording(IdentifiedMixin):
     """Immutable SigMF asset/version reference.
 
@@ -65,6 +81,7 @@ class IQRecording(IdentifiedMixin):
     duration_s: float = Field(ge=0)
     center_frequency_hz: float | None = None
     kind: RecordingKind = RecordingKind.SIGNAL
+    overview_spectrogram: SpectrogramOverview | None = None
     provenance: str | None = None
     access_classification: AccessClassification = AccessClassification.RESTRICTED
     allowed_use_constraints: list[str] = Field(default_factory=list)

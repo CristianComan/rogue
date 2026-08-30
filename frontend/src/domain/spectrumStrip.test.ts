@@ -29,6 +29,7 @@ function recording(overrides: Partial<IQRecording> = {}): IQRecording {
     duration_s: 1,
     center_frequency_hz: null,
     kind: "signal",
+    overview_spectrogram: null,
     provenance: null,
     access_classification: "restricted",
     allowed_use_constraints: [],
