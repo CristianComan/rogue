@@ -1,6 +1,5 @@
 import type {
   DroneMission,
-  RecordingReference,
   Receiver,
   ScenarioContent,
   ScenarioDraft,
@@ -23,13 +22,12 @@ export type EditorAction =
   | { type: "setMissions"; missions: DroneMission[] }
   | { type: "setReceivers"; receivers: Receiver[] }
   | { type: "setTimelineEvents"; events: TimelineEvent[] }
-  | { type: "setRecordings"; recordings: RecordingReference[] }
   | { type: "savedSuccessfully"; revision: number };
 
 export const initialEditorState: EditorState = {
   draftId: null,
   scenarioId: null,
-  content: { zones: [], missions: [], receivers: [], timeline_events: [], recordings: [] },
+  content: { zones: [], missions: [], receivers: [], timeline_events: [] },
   revision: 0,
   author: "",
   dirty: false,
@@ -46,7 +44,6 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
           missions: action.draft.missions,
           receivers: action.draft.receivers,
           timeline_events: action.draft.timeline_events,
-          recordings: action.draft.recordings,
         },
         revision: action.draft.revision,
         author: action.draft.author,
@@ -62,12 +59,6 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       return {
         ...state,
         content: { ...state.content, timeline_events: action.events },
-        dirty: true,
-      };
-    case "setRecordings":
-      return {
-        ...state,
-        content: { ...state.content, recordings: action.recordings },
         dirty: true,
       };
     case "savedSuccessfully":

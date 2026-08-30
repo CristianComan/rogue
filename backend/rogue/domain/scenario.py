@@ -93,3 +93,24 @@ class ScenarioVersion(FrozenRogueModel):
     author: str
     change_note: str | None = None
     validation_findings: list[ValidationFinding] = Field(default_factory=list)
+
+
+def derive_recording_references(missions: list[DroneMission]) -> list[RecordingReference]:
+    """The distinct recordings actually scheduled across a mission tree.
+
+    `ScenarioDraft.recordings`/`ScenarioVersion.recordings` are always built
+    from this rather than authored by hand — `Mission -> RfLink -> RfEmission`
+    is the single source of truth for which recording plays when. An
+    emission with no recording (`RfEmission.recording is None`, an explicit
+    silence span) contributes nothing. Deduplicated by (recording_id,
+    version); order follows first appearance.
+    """
+    seen: dict[tuple[UUID, int], RecordingReference] = {}
+    for mission in missions:
+        for link in mission.rf_links:
+            for emission in link.emissions:
+                if emission.recording is None:
+                    continue
+                key = (emission.recording.recording_id, emission.recording.version)
+                seen.setdefault(key, emission.recording)
+    return list(seen.values())

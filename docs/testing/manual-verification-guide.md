@@ -13,6 +13,7 @@ each block in a terminal from the repo root
 | M3 | Map + trajectory editor | clicking around a browser UI |
 | M4 | SigMF recording catalogue | `curl` against a running server |
 | M5 | RF spectrum planner | `curl` against a running server |
+| — | Recording schedule + spectrum waterfall (supplemental) | `curl` + a browser UI |
 | — | Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`) | run the script, then `curl`/`psql` |
 
 Each section is independent — jump to whichever milestone you want to check.
@@ -61,12 +62,12 @@ Expect: `All checks passed!`
 ```bash
 cd backend && mypy rogue && cd ..
 ```
-Expect: `Success: no issues found in 38 source files`
+Expect: `Success: no issues found in 41 source files`
 
 ```bash
 pytest tests/unit -q
 ```
-Expect: `146 passed`. (If Postgres isn't running, the persistence/API tests
+Expect: `167 passed`. (If Postgres isn't running, the persistence/API tests
 will error out with a connection-refused message — that's the DB, not a
 code problem; go back to section 0.)
 
@@ -76,8 +77,9 @@ To scope the test run to one milestone:
 pytest tests/unit/test_health.py -v                                  # M0
 pytest tests/unit/domain -v                                          # M1
 pytest tests/unit/persistence/test_repository.py tests/unit/api/test_scenarios.py -v   # M2
-pytest tests/unit/catalogue tests/unit/persistence/test_catalogue.py tests/unit/api/test_recordings.py -v   # M4
+pytest tests/unit/catalogue tests/unit/persistence/test_catalogue.py tests/unit/api/test_recordings.py -v   # M4 + recording schedule/waterfall
 pytest tests/unit/spectrum tests/unit/persistence/test_spectrum.py tests/unit/api/test_spectrum_planner.py -v   # M5
+pytest tests/unit/domain/test_rf.py tests/unit/domain/test_recording.py tests/unit/domain/test_validation.py -v   # recording schedule/waterfall domain
 ```
 (M3 is a frontend feature — its checks are `npm run typecheck`, `npm test`
 and `npm run e2e` from `frontend/`, see the M3 section below.)
@@ -502,6 +504,140 @@ and no `scripted_changes` — the mission-triggered link contributes no
 occupied band and instead produces a `"frequency_unresolved"` warning
 finding, since the backend has no mission-time-evaluation engine yet (that
 logic is still frontend-only, M3's `missionEvaluator.ts`).
+
+## Recording schedule + spectrum waterfall (supplemental)
+
+Not one of CLAUDE.md's numbered M1–M14 milestones — added by direct request,
+building on M1 (domain model) and M4 (catalogue). Three things to check:
+a spectrogram overview computed once at ingest (not live per request),
+signal-vs-background recording kind, and silence spans/overlap validation on
+a `DroneRfLink`'s emissions.
+
+### 1. A recording large enough to get a spectrogram overview
+
+The overview needs at least 256 samples to compute even one FFT window (M4's
+`test.sigmf-meta`/`test.sigmf-data` fixture above is only 100 — too short).
+Upload a bigger synthetic one:
+
+```python
+# append to /tmp/upload_test_sigmf.py, or run standalone with the same s3 client setup
+samples_big = b"".join(struct.pack("<ff", 0.001 * i, -0.001 * i) for i in range(2000))
+meta_big = {
+    "global": {"core:datatype": "cf32_le", "core:sample_rate": 1_000_000},
+    "captures": [{"core:sample_start": 0, "core:frequency": 2_400_000_000}],
+    "annotations": [],
+}
+s3.put_object(Bucket="rogue", Key="manual-check/overview.sigmf-meta", Body=json.dumps(meta_big).encode())
+s3.put_object(Bucket="rogue", Key="manual-check/overview.sigmf-data", Body=samples_big)
+print("uploaded manual-check/overview.sigmf-meta and manual-check/overview.sigmf-data")
+```
+
+Register it:
+
+```bash
+curl -s -X POST http://localhost:8000/recordings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "metadata_object_key": "manual-check/overview.sigmf-meta",
+    "data_object_key": "manual-check/overview.sigmf-data",
+    "provenance": "manual check overview"
+  }' | python3 -m json.tool
+```
+
+Expect `"kind": "signal"` (the default) and a non-null `"overview_spectrogram"`
+with 150 entries in `time_offsets_s`/`magnitude_db` and 256 in
+`freq_offsets_hz` — computed once here, at ingest, not recomputed on every
+later read of this recording.
+
+### 2. A background-kind recording
+
+```bash
+curl -s -X POST http://localhost:8000/recordings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "metadata_object_key": "manual-check/overview.sigmf-meta",
+    "data_object_key": "manual-check/overview.sigmf-data",
+    "provenance": "manual check background",
+    "kind": "background"
+  }' | python3 -m json.tool
+```
+
+Expect `"kind": "background"` in the response — this is what
+`RecordingPicker.tsx` groups/labels by in the editor, and what the frontend's
+"only replay background data" scheduling choice actually selects.
+
+### 3. Silence spans and overlap validation
+
+Reuse the scenario/draft pattern from M5 section 1, and the recording from
+step 1 above (`$RECORDING_ID`). Build a mission with one RF link carrying
+three emissions: a signal span, a silence span (`"recording": null`, which
+requires `duration_override`), and a third span placed to deliberately
+overlap the first:
+
+```bash
+curl -s -X PUT http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID \
+  -H "Content-Type: application/json" \
+  -d '{
+    "author": "manual-check",
+    "expected_revision": 0,
+    "zones": [], "receivers": [], "timeline_events": [],
+    "recordings": [{"recording_id": "'"$RECORDING_ID"'", "version": 1}],
+    "missions": [{
+      "name": "recon-1",
+      "platform": {"name": "Quad", "category": "multirotor", "max_speed_mps": 18.0},
+      "trajectory": {
+        "template": "waypoint_transit",
+        "default_speed_mps": 12.0,
+        "waypoints": [
+          {"sequence_index": 0, "position": {"type": "Point", "coordinates": [13.4, 52.2]}, "altitude_m": 100.0},
+          {"sequence_index": 1, "position": {"type": "Point", "coordinates": [13.45, 52.25]}, "altitude_m": 100.0}
+        ]
+      },
+      "rf_links": [{
+        "role": "c2",
+        "band": {"freq_min_hz": 2.4e9, "freq_max_hz": 2.4835e9},
+        "frequency_behaviour": {"mode": "scripted", "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.410e9}]},
+        "emissions": [
+          {"recording": {"recording_id": "'"$RECORDING_ID"'", "version": 1}, "start_offset": "PT0S", "duration_override": "PT10S"},
+          {"recording": null, "start_offset": "PT15S", "duration_override": "PT5S"},
+          {"recording": {"recording_id": "'"$RECORDING_ID"'", "version": 1}, "start_offset": "PT5S", "duration_override": "PT10S"}
+        ]
+      }]
+    }]
+  }' | python3 -m json.tool
+
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID/validate | python3 -m json.tool
+```
+
+Expect the `PUT` to succeed (silence with an explicit duration is a valid
+emission) and `validate` to return an `"overlapping_emissions"` BLOCKING
+finding — the first (`0s`–`10s`) and third (`5s`–`15s`) emissions overlap by
+5 seconds. Fix it by changing the third emission's `start_offset` to
+`"PT10S"` (right after the first ends) and re-run `validate`: the finding
+should disappear, leaving the silence span untouched in between.
+
+### 4. In the editor UI
+
+With the frontend dev server running (see the M3 section) and the same
+scenario open:
+
+1. Select the mission's RF link in the properties pane. Under **Emissions**,
+   each row now has a **Silence** checkbox — checking it clears the
+   recording picker and requires a duration (label changes to "Duration
+   (required)"); unchecking it restores the picker.
+2. The recording picker groups by platform as before, and now suffixes
+   `· background` on any recording registered with `"kind": "background"`
+   (step 2 above) so you can tell them apart from signal recordings at a
+   glance.
+3. Under **Resource preference (non-binding)**, check "Set a resource
+   preference for this link" — tag/sync-class/notes fields appear. This is
+   authored intent only; it never binds the link to a specific SDR (CLAUDE.md
+   rule 1) — there's deliberately no device/serial field here.
+4. In the timeline area below the map, a **Waterfall** panel renders per RF
+   link: "No active emission" before the mission starts, "Silence — link is
+   off-air" during the silence span you added, and a heatmap with a moving
+   amber playhead once an emission with a computed overview is active. Play
+   the timeline and confirm the playhead advances.
 
 ## Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`)
 

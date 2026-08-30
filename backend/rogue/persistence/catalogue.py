@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from rogue.catalogue.ingest import build_ingest_candidate
 from rogue.db.models import IQRecordingORM
-from rogue.domain.recording import AccessClassification, IQRecording
+from rogue.domain.recording import AccessClassification, IQRecording, RecordingKind
 from rogue.domain.validation import ValidationFinding, ValidationSeverity
 from rogue.persistence.repository import NotFoundError, ValidationRejectedError
 
@@ -45,6 +45,7 @@ async def ingest_recording(
     metadata_object_key: str,
     data_object_key: str,
     provenance: str | None,
+    kind: RecordingKind = RecordingKind.SIGNAL,
     access_classification: AccessClassification,
     allowed_use_constraints: list[str],
     allowed_frequency_min_hz: float | None,
@@ -78,6 +79,7 @@ async def ingest_recording(
         metadata_object_key=metadata_object_key,
         data_object_key=data_object_key,
         provenance=provenance,
+        kind=kind,
         access_classification=access_classification,
         allowed_use_constraints=allowed_use_constraints,
         allowed_frequency_min_hz=allowed_frequency_min_hz,

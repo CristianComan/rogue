@@ -50,14 +50,30 @@ class RfBand(RogueModel):
 
 
 class RfEmission(IdentifiedMixin):
-    """A logical emitted waveform mapped to a recording. Not a physical TX channel."""
+    """A logical scheduled span on a DroneRfLink's timeline. Not a physical TX channel.
 
-    recording: RecordingReference
+    ``recording`` is optional: ``None`` authors an explicit silence span (the
+    link is deliberately off-air for this span), distinct from simply not
+    scheduling anything there. A signal-of-interest vs. background-only span
+    is not a separate flag here — it follows from the referenced recording's
+    ``IQRecording.kind``.
+    """
+
+    recording: RecordingReference | None = None
     start_offset: timedelta = timedelta(0)
     duration_override: timedelta | None = None
     gain_offset_db: float = 0.0
     loop: bool = False
     notes: str | None = None
+
+    @model_validator(mode="after")
+    def _silence_requires_explicit_duration(self) -> RfEmission:
+        if self.recording is None and self.duration_override is None:
+            raise ValueError(
+                "an emission with no recording (an explicit silence span) requires "
+                "duration_override"
+            )
+        return self
 
 
 class FrequencySwitchingMode(StrEnum):

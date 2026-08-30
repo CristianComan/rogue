@@ -1,6 +1,44 @@
 import { describe, expect, it } from "vitest";
-import { currentFrequencyHz } from "./spectrumStrip";
-import type { DroneRfLink } from "./types";
+import { activeEmissionAt, currentFrequencyHz } from "./spectrumStrip";
+import type { DroneRfLink, IQRecording, RfEmission } from "./types";
+
+function emission(overrides: Partial<RfEmission> = {}): RfEmission {
+  return {
+    id: "e1",
+    recording: { recording_id: "rec-1", version: 1, note: null },
+    start_offset: "PT0S",
+    duration_override: null,
+    gain_offset_db: 0,
+    loop: false,
+    notes: null,
+    ...overrides,
+  };
+}
+
+function recording(overrides: Partial<IQRecording> = {}): IQRecording {
+  return {
+    id: "rec-1",
+    version: 1,
+    metadata_object_key: "k.sigmf-meta",
+    data_object_key: "k.sigmf-data",
+    sha256_metadata: "a".repeat(64),
+    sha256_data: "a".repeat(64),
+    sample_format: "cf32_le",
+    sample_rate_hz: 1_000_000,
+    sample_count: 1_000_000,
+    duration_s: 1,
+    center_frequency_hz: null,
+    kind: "signal",
+    overview_spectrogram: null,
+    provenance: null,
+    access_classification: "restricted",
+    allowed_use_constraints: [],
+    allowed_frequency_min_hz: null,
+    allowed_frequency_max_hz: null,
+    extra_sigmf_fields: {},
+    ...overrides,
+  };
+}
 
 function link(overrides: Partial<DroneRfLink> = {}): DroneRfLink {
   return {
@@ -69,5 +107,50 @@ describe("currentFrequencyHz", () => {
       },
     });
     expect(currentFrequencyHz(l, 500)).toBe(2_400_000_000);
+  });
+});
+
+describe("activeEmissionAt", () => {
+  it("returns null before any emission has started", () => {
+    const l = link({ emissions: [emission({ start_offset: "PT10S", duration_override: "PT5S" })] });
+    expect(activeEmissionAt(l, 5, [])).toBeNull();
+  });
+
+  it("resolves duration from duration_override when set", () => {
+    const e = emission({ start_offset: "PT0S", duration_override: "PT5S" });
+    const l = link({ emissions: [e] });
+    expect(activeEmissionAt(l, 4, [])).toBe(e);
+    expect(activeEmissionAt(l, 6, [])).toBeNull();
+  });
+
+  it("resolves duration from the catalogue when duration_override is unset", () => {
+    const e = emission({ start_offset: "PT0S", duration_override: null });
+    const l = link({ emissions: [e] });
+    const catalogue = [recording({ duration_s: 3 })];
+    expect(activeEmissionAt(l, 2, catalogue)).toBe(e);
+    expect(activeEmissionAt(l, 4, catalogue)).toBeNull();
+  });
+
+  it("treats an emission as active once started if duration can't be resolved", () => {
+    const e = emission({ start_offset: "PT0S", duration_override: null });
+    const l = link({ emissions: [e] });
+    expect(activeEmissionAt(l, 1_000, [])).toBe(e);
+  });
+
+  it("a looping emission is always active once started", () => {
+    const e = emission({ start_offset: "PT0S", duration_override: "PT1S", loop: true });
+    const l = link({ emissions: [e] });
+    expect(activeEmissionAt(l, 10_000, [])).toBe(e);
+  });
+
+  it("returns an explicit silence emission (recording: null) as active", () => {
+    const e = emission({ recording: null, start_offset: "PT0S", duration_override: "PT5S" });
+    const l = link({ emissions: [e] });
+    expect(activeEmissionAt(l, 2, [])).toBe(e);
+  });
+
+  it("returns null when nothing is scheduled at all", () => {
+    const l = link({ emissions: [] });
+    expect(activeEmissionAt(l, 0, [])).toBeNull();
   });
 });

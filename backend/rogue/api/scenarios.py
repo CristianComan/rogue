@@ -24,7 +24,12 @@ from rogue.api.schemas import (
     ScenarioCreateRequest,
 )
 from rogue.db.session import get_session
-from rogue.domain.scenario import Scenario, ScenarioDraft, ScenarioVersion
+from rogue.domain.scenario import (
+    Scenario,
+    ScenarioDraft,
+    ScenarioVersion,
+    derive_recording_references,
+)
 from rogue.domain.validation import ValidationFinding
 from rogue.persistence import repository
 
@@ -103,7 +108,7 @@ async def create_draft(
             missions=request.missions,
             receivers=request.receivers,
             timeline_events=request.timeline_events,
-            recordings=request.recordings,
+            recordings=derive_recording_references(request.missions),
             created_at=now,
             updated_at=now,
         )
@@ -140,7 +145,7 @@ async def update_draft(
             "missions": request.missions,
             "receivers": request.receivers,
             "timeline_events": request.timeline_events,
-            "recordings": request.recordings,
+            "recordings": derive_recording_references(request.missions),
         }
     )
     saved = await repository.update_draft(

@@ -70,7 +70,6 @@ export function ScenarioEditorPage() {
         missions: seed?.missions ?? [],
         receivers: seed?.receivers ?? [],
         timeline_events: seed?.timeline_events ?? [],
-        recordings: seed?.recordings ?? [],
       });
       if (!cancelled) dispatch({ type: "loadDraft", draft });
     }

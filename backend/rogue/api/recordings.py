@@ -41,6 +41,7 @@ async def ingest_recording(
             metadata_object_key=request.metadata_object_key,
             data_object_key=request.data_object_key,
             provenance=request.provenance,
+            kind=request.kind,
             access_classification=request.access_classification,
             allowed_use_constraints=request.allowed_use_constraints,
             allowed_frequency_min_hz=request.allowed_frequency_min_hz,

@@ -130,6 +130,22 @@ export interface RecordingReference {
 // mirrors backend/rogue/domain/recording.py:AccessClassification
 export type AccessClassification = "public" | "restricted" | "controlled";
 
+// mirrors backend/rogue/domain/recording.py:RecordingKind
+export type RecordingKind = "signal" | "background";
+
+// mirrors backend/rogue/domain/recording.py:SpectrogramOverview — a coarse,
+// whole-recording time/frequency dB preview computed once at ingest (sparse
+// FFT samples spread across the recording, not a continuous STFT — a live
+// STFT over a real recording's sample rate is far too much data per
+// request). Frequency bins are baseband-centered on the recording's own
+// capture frequency, not any scenario RfLink's live authored frequency;
+// Waterfall.tsx re-centers for display.
+export interface SpectrogramOverview {
+  time_offsets_s: number[];
+  freq_offsets_hz: number[];
+  magnitude_db: number[][];
+}
+
 // mirrors backend/rogue/domain/recording.py:IQRecording — the M4 catalogue
 // entry shape returned by GET /recordings (src/api/recordings.ts). Not the
 // same thing as RecordingReference above, which is just an
@@ -146,6 +162,8 @@ export interface IQRecording {
   sample_count: number;
   duration_s: number;
   center_frequency_hz: number | null;
+  kind: RecordingKind;
+  overview_spectrogram: SpectrogramOverview | null;
   provenance: string | null;
   access_classification: AccessClassification;
   allowed_use_constraints: string[];
@@ -154,10 +172,12 @@ export interface IQRecording {
   extra_sigmf_fields: Record<string, unknown>;
 }
 
-// mirrors backend/rogue/domain/rf.py:RfEmission
+// mirrors backend/rogue/domain/rf.py:RfEmission — `recording: null` authors
+// an explicit silence span (the link is deliberately off-air), distinct
+// from simply not scheduling anything there.
 export interface RfEmission {
   id: string;
-  recording: RecordingReference;
+  recording: RecordingReference | null;
   start_offset: string; // ISO8601 duration
   duration_override: string | null;
   gain_offset_db: number;
@@ -305,13 +325,19 @@ export interface Scenario {
   updated_at: string;
 }
 
-/** Content fields shared by ScenarioDraft and ScenarioVersion. */
+/**
+ * Editable content fields shared by draft-create/update requests and the
+ * local editor state. No `recordings` here — it's never client-authored,
+ * the server always derives it from `missions[].rf_links[].emissions[]`
+ * (backend/rogue/domain/scenario.py:derive_recording_references). It shows
+ * up only on the full ScenarioDraft/ScenarioVersion response shapes below,
+ * alongside their other server-assigned fields.
+ */
 export interface ScenarioContent {
   zones: Zone[];
   missions: DroneMission[];
   receivers: Receiver[];
   timeline_events: TimelineEvent[];
-  recordings: RecordingReference[];
 }
 
 // mirrors backend/rogue/domain/scenario.py:ScenarioDraft
@@ -321,6 +347,7 @@ export interface ScenarioDraft extends ScenarioContent {
   base_version_id: string | null;
   revision: number;
   author: string;
+  recordings: RecordingReference[];
   created_at: string;
   updated_at: string;
 }
@@ -343,6 +370,7 @@ export interface ScenarioVersion extends ScenarioContent {
   version_number: number;
   schema_version: string;
   author: string;
+  recordings: RecordingReference[];
   change_note: string | null;
   validation_findings: ValidationFinding[];
 }

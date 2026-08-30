@@ -44,16 +44,29 @@ test("create -> mission -> validate -> save -> publish -> view published version
   await expect(page.getByText("1 mission(s), 0 receiver(s)")).toBeVisible();
 });
 
-test("publish is blocked by a dangling recording reference, and resolves once fixed", async ({
-  page,
-}) => {
+test("publish is blocked by overlapping emissions, and resolves once fixed", async ({ page }) => {
   await createScenarioViaLibrary(page, `E2E 422 path ${Date.now()}`, "e2e");
 
   await page.getByRole("button", { name: "+ Mission" }).click();
   await page.getByRole("button", { name: "+ RF link" }).click();
   await page.getByRole("button", { name: "+ Emission" }).click();
+  await page.getByRole("button", { name: "+ Emission" }).click();
 
-  const danglingId = await page.getByTestId("emission-0").getByLabel("Recording ID").inputValue();
+  const emission0 = page.getByTestId("emission-0");
+  const emission1 = page.getByTestId("emission-1");
+  const recordingId = "00000000-0000-4000-8000-000000000001";
+
+  // Both emissions point at the same made-up recording id via the "Custom
+  // UUID…" fallback — there's no catalogue-existence check, only overlap
+  // matters here.
+  await emission0.getByLabel("Recording").selectOption({ label: "Custom UUID…" });
+  await emission0.getByPlaceholder("recording UUID").fill(recordingId);
+  await emission0.getByLabel(/Duration/).fill("PT10S");
+
+  await emission1.getByLabel("Recording").selectOption({ label: "Custom UUID…" });
+  await emission1.getByPlaceholder("recording UUID").fill(recordingId);
+  await emission1.getByLabel("Start offset").fill("PT5S");
+  await emission1.getByLabel(/Duration/).fill("PT10S");
 
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByText(/revision 1/)).toBeVisible();
@@ -61,13 +74,12 @@ test("publish is blocked by a dangling recording reference, and resolves once fi
   await page.getByRole("button", { name: "Publish" }).click();
   const dialog = page.getByRole("dialog", { name: "Publish blocked" });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText("dangling_recording_reference")).toBeVisible();
+  await expect(dialog.getByText("overlapping_emissions")).toBeVisible();
   await dialog.getByRole("button", { name: "Close" }).click();
   await expect(dialog).toBeHidden();
 
-  // Fix it: point a recording reference at the id the emission expects.
-  await page.getByRole("button", { name: "+ Recording" }).click();
-  await page.getByTestId("recordings-panel").getByLabel("Recording ID").fill(danglingId);
+  // Fix it: move the second emission to start right after the first ends.
+  await emission1.getByLabel("Start offset").fill("PT10S");
 
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByText(/revision 2/)).toBeVisible();
@@ -102,7 +114,6 @@ test("a stale revision produces a 409 conflict banner on save", async ({ page, r
         missions: [],
         receivers: [],
         timeline_events: [],
-        recordings: [],
       },
     },
   );

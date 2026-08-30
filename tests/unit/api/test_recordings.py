@@ -64,6 +64,16 @@ def test_ingest_recording_returns_recording_and_empty_findings(client: TestClien
     assert result["recording"]["sample_count"] == 100
 
 
+def test_ingest_defaults_to_signal_kind(client: TestClient) -> None:
+    result = _ingest(client)
+    assert result["recording"]["kind"] == "signal"
+
+
+def test_ingest_can_register_a_background_recording(client: TestClient) -> None:
+    result = _ingest(client, kind="background")
+    assert result["recording"]["kind"] == "background"
+
+
 def test_ingest_and_get_recording(client: TestClient) -> None:
     ingested = _ingest(client)["recording"]
 
@@ -149,3 +159,9 @@ def test_get_missing_version_is_404(client: TestClient) -> None:
     response = client.get(f"/recordings/{ingested['id']}/versions/99")
 
     assert response.status_code == 404
+
+
+def test_recording_without_enough_samples_has_no_overview(client: TestClient) -> None:
+    # DATA_BYTES is only 100 samples; the overview needs at least 256.
+    ingested = _ingest(client)["recording"]
+    assert ingested["overview_spectrogram"] is None

@@ -52,7 +52,11 @@ export function ZonePolygonEditor({ polygon, onChange }: ZonePolygonEditorProps)
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       {vertices.map((v, i) => (
-        <div key={i} data-testid={`zone-vertex-${i}`} style={{ display: "flex", gap: 8 }}>
+        <div
+          key={i}
+          data-testid={`zone-vertex-${i}`}
+          style={{ display: "flex", gap: 8, flexWrap: "wrap" }}
+        >
           <NumberField
             label="Lon"
             value={v[0]}

@@ -61,7 +61,7 @@ export function WaypointListEditor({ waypoints, onChange }: WaypointListEditorPr
           }}
         >
           <strong>Waypoint {i}</strong>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <NumberField
               label="Lon"
               value={w.position.coordinates[0]}
@@ -83,7 +83,7 @@ export function WaypointListEditor({ waypoints, onChange }: WaypointListEditorPr
               }
             />
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <NumberField
               label="Altitude (m)"
               value={w.altitude_m}
@@ -96,7 +96,7 @@ export function WaypointListEditor({ waypoints, onChange }: WaypointListEditorPr
               onChange={(altitude_reference) => updateAt(i, { altitude_reference })}
             />
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <NumberField
               label="Speed override (m/s)"
               value={w.speed_mps ?? 0}

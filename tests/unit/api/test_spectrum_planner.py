@@ -108,12 +108,7 @@ def test_spectrum_state_returns_occupied_band(client: TestClient) -> None:
 
     scenario = _create_scenario(client)
     mission = _mission_with_recording(ingested["id"])
-    draft = _create_draft(
-        client,
-        scenario["id"],
-        missions=[mission],
-        recordings=[{"recording_id": ingested["id"], "version": 1}],
-    )
+    draft = _create_draft(client, scenario["id"], missions=[mission])
 
     response = client.post(
         f"/scenarios/{scenario['id']}/drafts/{draft['id']}/spectrum", json={"at_seconds": 0.0}

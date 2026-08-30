@@ -16,6 +16,8 @@ function recording(overrides: Partial<IQRecording> = {}): IQRecording {
     sample_count: 1_000_000,
     duration_s: 1,
     center_frequency_hz: 2_450_000_000,
+    kind: "signal",
+    overview_spectrogram: null,
     provenance: null,
     access_classification: "restricted",
     allowed_use_constraints: [],
@@ -90,5 +92,14 @@ describe("RecordingPicker", () => {
     render(<RecordingPicker recordings={recordings} value="legacy-id" onChange={vi.fn()} />);
 
     expect(screen.getByPlaceholderText("recording UUID")).toHaveValue("legacy-id");
+  });
+
+  it("selecting 'Custom UUID…' with no value typed yet still shows the text input", () => {
+    const recordings = [recording({ id: "r1" })];
+    render(<RecordingPicker recordings={recordings} value="" onChange={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText("Recording"), { target: { value: "__custom__" } });
+
+    expect(screen.getByPlaceholderText("recording UUID")).toBeInTheDocument();
   });
 });

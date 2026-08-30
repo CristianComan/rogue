@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 from factories import drone_rf_link_kwargs, rf_band_kwargs
 from pydantic import ValidationError
@@ -12,6 +14,7 @@ from rogue.domain.rf import (
     FrequencySwitchingMode,
     ResourcePreference,
     RfBand,
+    RfEmission,
 )
 
 
@@ -58,3 +61,25 @@ def test_valid_drone_rf_link_round_trips() -> None:
     restored = DroneRfLink.model_validate(dumped)
     assert restored.role == link.role
     assert len(restored.emissions) == 1
+
+
+def test_silence_emission_requires_explicit_duration() -> None:
+    with pytest.raises(ValidationError):
+        RfEmission(recording=None, start_offset=timedelta(0))
+
+
+def test_silence_emission_valid_with_duration() -> None:
+    emission = RfEmission(
+        recording=None, start_offset=timedelta(seconds=5), duration_override=timedelta(seconds=10)
+    )
+    assert emission.recording is None
+    assert emission.duration_override == timedelta(seconds=10)
+
+
+def test_silence_emission_round_trips() -> None:
+    emission = RfEmission(
+        recording=None, start_offset=timedelta(0), duration_override=timedelta(seconds=3)
+    )
+    dumped = emission.model_dump(mode="json")
+    restored = RfEmission.model_validate(dumped)
+    assert restored.recording is None

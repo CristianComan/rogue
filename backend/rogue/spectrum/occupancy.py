@@ -138,6 +138,10 @@ def active_emission_at(
         if emission.duration_override is not None:
             duration: float | None = emission.duration_override.total_seconds()
         else:
+            # RfEmission's own model validator requires duration_override
+            # whenever recording is None, so reaching here means recording
+            # is set.
+            assert emission.recording is not None
             key = (emission.recording.recording_id, emission.recording.version)
             recording = recordings.get(key)
             duration = recording.duration_s if recording is not None else None
@@ -175,6 +179,10 @@ def compute_spectrum_state(
 
             emission = active_emission_at(link, at_seconds, recordings)
             if emission is None:
+                continue
+            if emission.recording is None:
+                # An explicit silence span (RfEmission.recording is None): the
+                # link is deliberately off-air, not an error condition.
                 continue
 
             resolution = resolve_frequency_hz(link, at_seconds)

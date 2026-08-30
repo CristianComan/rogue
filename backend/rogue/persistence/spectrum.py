@@ -40,6 +40,7 @@ async def spectrum_state_for_draft(
         for mission in candidate.missions
         for link in mission.rf_links
         for emission in link.emissions
+        if emission.recording is not None
     }
     recordings: dict[RecordingKey, IQRecording] = {}
     for recording_id, version in recording_keys:
