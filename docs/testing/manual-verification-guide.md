@@ -12,6 +12,7 @@ each block in a terminal from the repo root
 | M2 | Scenario persistence/API | `curl` against a running server |
 | M3 | Map + trajectory editor | clicking around a browser UI |
 | M4 | SigMF recording catalogue | `curl` against a running server |
+| — | Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`) | run the script, then `curl`/`psql` |
 
 Each section is independent — jump to whichever milestone you want to check.
 Section 0 is shared setup everything else depends on.
@@ -172,8 +173,13 @@ version. This is the same scenario the M3 section below opens in the UI.
 
 This is a frontend feature — you click through a browser instead of curling.
 
-Start the dev server (Vite needs Node 20+; this repo's system Node is 18.x,
-so use the wrapper script rather than a bare `npm run dev`):
+Start the dev server. The machine's Node is now consolidated to a single
+nvm-managed v24 LTS (see `frontend/.nvmrc`), so a plain `npm run dev` from
+`frontend/` works fine in a normal interactive terminal — but
+`frontend/dev.sh` is still the more robust choice since it explicitly
+resolves `nvm use default` itself rather than relying on your shell already
+having done so (matters for non-interactive launchers, or if some other
+project's `nvm use` is still active in that terminal):
 
 ```bash
 frontend/dev.sh
@@ -339,6 +345,72 @@ psql postgresql://rogue:rogue_dev_only@localhost:5432/rogue \
 You should see one row for the recording from step 2 (the rejected one from
 step 3 won't appear — rejects are never written).
 
+## Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`)
+
+Everything above uses synthetic recordings. `scripts/ingest_drone_corpus.py`
+is a small CLI tool that instead pulls real captures from a Droids-style
+SigMF drone-RF dataset (one subdirectory per drone class, e.g.
+`00`, `01`, ..., `no_drone`) and registers a representative sample through
+the same M4 catalogue. Only relevant if you have such a dataset mounted
+locally — e.g. `/media/cristian/Crucial X62/DroneIQRecordings/Droids_data11_sigmf/15June2022`.
+
+**1. Preview the selection without touching anything:**
+
+```bash
+python scripts/ingest_drone_corpus.py \
+  --source-root "/media/cristian/Crucial X62/DroneIQRecordings/Droids_data11_sigmf/15June2022" \
+  --dry-run
+```
+
+Expect a list of one recording per drone-class subdirectory (drone id,
+platform name pulled from the recording's own `classification:platform`
+SigMF field, and which experiment scenario was picked — `air` preferred,
+falling back to `los`/`env`/etc.) with a total size, and nothing uploaded.
+
+**2. Run it for real** (needs the M0 server and section 0's Postgres/MinIO
+running):
+
+```bash
+python scripts/ingest_drone_corpus.py \
+  --source-root "/media/cristian/Crucial X62/DroneIQRecordings/Droids_data11_sigmf/15June2022"
+```
+
+Expect one `registered as <uuid> v1` line per drone class, streamed to MinIO
+in 8MB chunks (never buffering a full ~32MB recording in memory) and ending
+in `N/N ingested successfully`.
+
+**Targeting a specific experiment/band instead of the default per-drone
+pick:** pass `--scenario` and/or `--band` to filter on the SigMF filename's
+`exp=`/`fc=` tokens (e.g. `--scenario both --band 5800e6` for "drone and
+controller both transmitting, 5.8GHz" — only 4 of the 17 drone classes in
+the 15June2022 campaign have a 5.8GHz recording at all, so this naturally
+skips the rest with a `no matching SigMF recording under ...` note):
+
+```bash
+python scripts/ingest_drone_corpus.py \
+  --source-root "/media/cristian/Crucial X62/DroneIQRecordings/Droids_data11_sigmf/15June2022" \
+  --scenario both --band 5800e6 --dry-run
+```
+
+**3. Verify what landed:**
+
+```bash
+curl -s "http://localhost:8000/recordings?limit=50" | python3 -m json.tool
+psql postgresql://rogue:rogue_dev_only@localhost:5432/rogue \
+  -c "select id, version, provenance from iq_recordings where provenance like 'campaign=%' order by created_at;"
+```
+
+Each row's `provenance` string encodes the campaign, drone id and platform
+(e.g. `campaign=15June2022, drone_id=00, platform=DJI Mavic 2 Pro, ...`), so
+you can tell these apart from the synthetic M4 test data above at a glance.
+
+**Note on reruns:** this is *not* idempotent — rerunning without deleting the
+old rows first registers brand-new catalogue entries (duplicates), since no
+`recording_id` is passed to update in place. If you're just re-verifying,
+either accept the duplicates or delete the `iq_recordings` rows for that
+campaign first (same `psql` pattern as above, with `delete from` instead of
+`select`).
+
 ## Cleanup
 
 - Stop the backend server with `Ctrl-C`; stop `frontend/dev.sh` with `Ctrl-C`
@@ -347,3 +419,7 @@ step 3 won't appear — rejects are never written).
   `manual-check/*` objects in MinIO, the `iq_recordings` row) is harmless
   test data — delete it if you want a clean slate, or leave it; nothing in
   the app treats it specially.
+- If you ran the drone corpus loader, its rows/objects are real reference
+  data rather than throwaway test fixtures — worth keeping rather than
+  deleting, unless you were just testing the script itself (see its "note on
+  reruns" above).

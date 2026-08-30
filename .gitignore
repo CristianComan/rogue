@@ -48,6 +48,7 @@ logs/
 runtime/
 tmp/
 .cache/
+.claude/launch.json
 
 # --- Databases / local volumes ---
 postgres-data/
