@@ -122,6 +122,25 @@ class IQRecordingORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ReplayPlanORM(Base):
+    """Immutable compiled Replay Plan (M6) — see ``rogue.compiler.models.ReplayPlan``.
+
+    Rows are immutable once inserted, like ``scenario_versions``/
+    ``iq_recordings``: no UPDATE/DELETE is ever issued against this table.
+    """
+
+    __tablename__ = "replay_plans"
+
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    scenario_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("scenarios.id"), nullable=False
+    )
+    scenario_version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    compiler_version: Mapped[str] = mapped_column(String, nullable=False)
+    document: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class IdempotencyKeyORM(Base):
     """Cached response for a replayed mutating request, keyed per endpoint."""
 

@@ -33,3 +33,15 @@ def register_exception_handlers(app: FastAPI) -> None:
                 "findings": [f.model_dump(mode="json") for f in exc.findings],
             },
         )
+
+    @app.exception_handler(repository.CompilationRejectedError)
+    async def _compilation_rejected(
+        request: Request, exc: repository.CompilationRejectedError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": "compilation rejected: blocking compiler findings",
+                "findings": [f.model_dump(mode="json") for f in exc.findings],
+            },
+        )

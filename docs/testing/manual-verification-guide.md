@@ -1,4 +1,4 @@
-# Checking ROGUE yourself — manual verification guide (M0–M5)
+# Checking ROGUE yourself — manual verification guide (M0–M6)
 
 A hands-on walkthrough for verifying what's been built so far, milestone by
 milestone, without having to read the code. Everything is copy/paste — run
@@ -14,6 +14,7 @@ each block in a terminal from the repo root
 | M4 | SigMF recording catalogue | `curl` against a running server |
 | M5 | RF spectrum planner | `curl` against a running server |
 | — | Recording schedule + spectrum waterfall (supplemental) | `curl` + a browser UI |
+| M6 | Replay Plan compiler | `curl` against a running server |
 | — | Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`) | run the script, then `curl`/`psql` |
 
 Each section is independent — jump to whichever milestone you want to check.
@@ -26,7 +27,7 @@ cd /home/cristian/Programming/python/26.IC/rogue
 source .venv/bin/activate
 ```
 
-M2/M3/M4/M5 need Postgres and MinIO (S3-compatible storage) running locally.
+M2/M3/M4/M5/M6 need Postgres and MinIO (S3-compatible storage) running locally.
 M0/M1 don't need anything beyond the venv. Check whether the services are up:
 
 ```bash
@@ -62,12 +63,12 @@ Expect: `All checks passed!`
 ```bash
 cd backend && mypy rogue && cd ..
 ```
-Expect: `Success: no issues found in 41 source files`
+Expect: `Success: no issues found in 50 source files`
 
 ```bash
 pytest tests/unit -q
 ```
-Expect: `167 passed`. (If Postgres isn't running, the persistence/API tests
+Expect: `207 passed`. (If Postgres isn't running, the persistence/API tests
 will error out with a connection-refused message — that's the DB, not a
 code problem; go back to section 0.)
 
@@ -80,6 +81,7 @@ pytest tests/unit/persistence/test_repository.py tests/unit/api/test_scenarios.p
 pytest tests/unit/catalogue tests/unit/persistence/test_catalogue.py tests/unit/api/test_recordings.py -v   # M4 + recording schedule/waterfall
 pytest tests/unit/spectrum tests/unit/persistence/test_spectrum.py tests/unit/api/test_spectrum_planner.py -v   # M5
 pytest tests/unit/domain/test_rf.py tests/unit/domain/test_recording.py tests/unit/domain/test_validation.py -v   # recording schedule/waterfall domain
+pytest tests/unit/compiler tests/unit/persistence/test_replay.py tests/unit/api/test_replay_compiler.py -v   # M6
 ```
 (M3 is a frontend feature — its checks are `npm run typecheck`, `npm test`
 and `npm run e2e` from `frontend/`, see the M3 section below.)
@@ -639,6 +641,105 @@ scenario open:
    amber playhead once an emission with a computed overview is active. Play
    the timeline and confirm the playhead advances.
 
+## M6 — Replay Plan compiler
+
+M6 compiles a *published* `ScenarioVersion` (not a draft) into an immutable
+`ReplayPlan`: realized frequency events, RF windows/composite channels and a
+physical-channel allocation, against a declared/simulated
+`HardwareCapabilityProfile` — never real, runtime-discovered hardware (that's
+M8/M10). This walkthrough publishes a small scenario (M2) with one recording
+(M4) and one RF link, then compiles it.
+
+**1. Scenario, draft, recording** (same pattern as M5's setup):
+
+```bash
+SCENARIO=$(curl -s -X POST http://localhost:8000/scenarios \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "manual-check replay-plan scenario",
+    "owner": "manual-check",
+    "area_of_operation": {"type":"Polygon","coordinates":[[[13.0,52.0],[13.6,52.0],[13.6,52.6],[13.0,52.6],[13.0,52.0]]]}
+  }')
+SCENARIO_ID=$(echo "$SCENARIO" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+
+DRAFT=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts \
+  -H "Content-Type: application/json" -d '{"author":"manual-check"}')
+DRAFT_ID=$(echo "$DRAFT" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+
+RECORDING=$(curl -s -X POST http://localhost:8000/recordings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "metadata_object_key": "manual-check/test.sigmf-meta",
+    "data_object_key": "manual-check/test.sigmf-data",
+    "provenance": "manual check replay plan"
+  }')
+RECORDING_ID=$(echo "$RECORDING" | python3 -c "import sys,json;print(json.load(sys.stdin)['recording']['id'])")
+```
+
+**2. Attach one RF link, then publish** (compiling requires a *version*, not
+a draft — this is the same publish call as M2):
+
+```bash
+curl -s -X PUT http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID \
+  -H "Content-Type: application/json" \
+  -d '{
+    "author": "manual-check",
+    "expected_revision": 0,
+    "zones": [], "receivers": [], "timeline_events": [],
+    "missions": [{
+      "name": "recon-1",
+      "platform": {"name": "Quad", "category": "multirotor", "max_speed_mps": 18.0},
+      "trajectory": {
+        "template": "waypoint_transit",
+        "default_speed_mps": 12.0,
+        "waypoints": [
+          {"sequence_index": 0, "position": {"type": "Point", "coordinates": [13.4, 52.2]}, "altitude_m": 100.0},
+          {"sequence_index": 1, "position": {"type": "Point", "coordinates": [13.45, 52.25]}, "altitude_m": 100.0}
+        ]
+      },
+      "rf_links": [{
+        "role": "c2",
+        "band": {"freq_min_hz": 2.4e9, "freq_max_hz": 2.4835e9},
+        "frequency_behaviour": {"mode": "scripted", "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.412e9}]},
+        "emissions": [{"recording": {"recording_id": "'"$RECORDING_ID"'", "version": 1}}]
+      }]
+    }]
+  }' > /dev/null
+
+VERSION=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID/publish)
+VERSION_NUMBER=$(echo "$VERSION" | python3 -c "import sys,json;print(json.load(sys.stdin)['version_number'])")
+```
+
+**3. Compile it** (`duration_s` is the compile horizon — how far into the
+scenario the plan covers, since there's no scenario-duration field yet;
+`capability_profile` is omitted here, so it defaults to
+`DEFAULT_CAPABILITY_PROFILE`, the illustrative 24-channel profile from
+CLAUDE.md section 4):
+
+```bash
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/versions/$VERSION_NUMBER/compile \
+  -H "Content-Type: application/json" -d '{"duration_s": 20.0}' | python3 -m json.tool
+```
+
+Expect one `rf_windows` entry (the single link's occupied band, centered on
+2.412 GHz) and one `allocations` entry pointing at an `x440-1` channel (the
+first capability-profile channel whose tunable range covers 2.412 GHz),
+`safety_policy_outcome.tx_authorized: false` (compiling never authorizes
+transmission — that's M8), and `findings: []`.
+
+**4. List/fetch the compiled plan:**
+
+```bash
+curl -s http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans | python3 -m json.tool
+```
+
+**5. See a rejected compile (optional).** Re-run step 3 with a much smaller
+`capability_profile` (e.g. one channel with `"max_usable_bandwidth_hz":
+1000.0`) in the request body — the link's ~1 MHz occupied bandwidth no
+longer fits any configured channel, so the response is `422` with a
+`rf_window_infeasible` BLOCKING finding and nothing is persisted (check
+step 4 again: the plan list is unchanged).
+
 ## Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`)
 
 Everything above uses synthetic recordings. `scripts/ingest_drone_corpus.py`
@@ -710,9 +811,9 @@ campaign first (same `psql` pattern as above, with `delete from` instead of
 - Stop the backend server with `Ctrl-C`; stop `frontend/dev.sh` with `Ctrl-C`
   in its terminal too.
 - Everything created above (`manual-check scenario` in Postgres, the
-  `manual-check/*` objects in MinIO, the `iq_recordings` row) is harmless
-  test data — delete it if you want a clean slate, or leave it; nothing in
-  the app treats it specially.
+  `manual-check/*` objects in MinIO, the `iq_recordings`/`replay_plans` rows)
+  is harmless test data — delete it if you want a clean slate, or leave it;
+  nothing in the app treats it specially.
 - If you ran the drone corpus loader, its rows/objects are real reference
   data rather than throwaway test fixtures — worth keeping rather than
   deleting, unless you were just testing the script itself (see its "note on

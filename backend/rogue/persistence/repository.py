@@ -27,6 +27,7 @@ from shapely.geometry import Polygon as ShapelyPolygon
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from rogue.compiler.models import CompilerFinding
 from rogue.db.models import IdempotencyKeyORM, ScenarioDraftORM, ScenarioORM, ScenarioVersionORM
 from rogue.domain.common import GeoPolygon
 from rogue.domain.scenario import Scenario, ScenarioDraft, ScenarioVersion
@@ -46,6 +47,14 @@ class ValidationRejectedError(Exception):
 
     def __init__(self, findings: list[ValidationFinding]) -> None:
         super().__init__(f"{len(findings)} blocking validation finding(s)")
+        self.findings = findings
+
+
+class CompilationRejectedError(Exception):
+    """Raised when compilation (M6) produces BLOCKING findings; nothing is persisted."""
+
+    def __init__(self, findings: list[CompilerFinding]) -> None:
+        super().__init__(f"{len(findings)} blocking compiler finding(s)")
         self.findings = findings
 
 

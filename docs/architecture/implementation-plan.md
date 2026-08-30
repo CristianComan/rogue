@@ -15,7 +15,7 @@ Build ROGUE in bounded, testable increments. Do not begin with hardware-specific
 | M4 | SigMF catalogue | validated immutable recording assets | Done — `feature/sigmf-catalogue`, merged to `develop` |
 | M5 | RF spectrum planner | deterministic spectrum state and conflict/headroom findings | Done — `feature/rf-spectrum-planner`, merged to `develop` |
 | — | Recording schedule + spectrum waterfall | per-platform recording/background/silence scheduling, real spectrogram preview | In progress — `feature/recording-schedule-waterfall` (supplemental; not in the original CLAUDE.md M-sequence, added by direct request) |
-| M6 | Replay Plan compiler | scenario compiles to hardware-neutral executable plan | Planned |
+| M6 | Replay Plan compiler | scenario compiles to hardware-neutral executable plan | Done — `feature/replay-plan-compile`, not yet merged |
 | M7 | Simulated SDR execution | full prepare/arm/start/stop without hardware | Planned |
 | M8 | Distributed SDR Agent | leases, cache, protocol, watchdog, telemetry | Planned |
 | M9 | First real adapter | cabled/attenuated replay on one supported device | Planned |
@@ -135,6 +135,57 @@ Playwright e2e suite covering create→validate→save→publish, overlapping-em
 rejection, and 409 stale-revision conflicts. A real "does this recording exist in the catalogue"
 validation still doesn't exist (the retired check never actually verified that either) — flagged as
 a natural follow-up, not bundled into this pass.
+
+### M6 — Replay Plan compiler (done)
+
+Branch `feature/replay-plan-compile`, based on `develop` after the
+recording-schedule/waterfall supplemental. New `backend/rogue/compiler/`
+package (mirroring `backend/rogue/spectrum/`'s pure-function-then-
+persistence-wrapper shape): `frequency.py` realizes SCRIPTED/
+PROBABILISTIC_ADAPTIVE frequency-agility over a full compile horizon
+(reusing a small extraction from M5's `spectrum/occupancy.py` —
+`probabilistic_dwell_segments` — so the seeded-RNG dwell math has one
+implementation, not two); `windows.py` packs co-occurring occupied bands
+(via M5's `compute_spectrum_state`, evaluated at every occupancy-changing
+instant) into `RfWindow`/`CompositeChannel` spans; `allocation.py` assigns
+each window span to a physical TX channel from a `HardwareCapabilityProfile`
+(stable-preferring, first-fit); `compile.py` orchestrates all three into an
+immutable `ReplayPlan`. See ADR-006 for the exact packing/allocation
+algorithm and its limits, and `models.py`'s `DEFAULT_CAPABILITY_PROFILE`
+for the illustrative 24-channel default (CLAUDE.md section 4).
+
+"Hardware-neutral" per this milestone's exit criterion means the compiler
+takes `HardwareCapabilityProfile` as a compile-time input (defaulting to
+the illustrative profile above) rather than runtime-discovered hardware —
+real capability readback is M8/M10, per CLAUDE.md rule 10 and the
+explicit M1-M14 sequencing. `Receiver` geometry, Doppler/delay/phase and
+aggregate peak/RMS/intermodulation assessment are correspondingly out of
+scope (M12-M14); `SafetyPolicyOutcome.tx_authorized` is a structural
+`False` placeholder (rule 12) — the full lease/policy engine is M8.
+
+Persisted the same way as M2/M4's immutable artifacts: a new `replay_plans`
+JSONB-document table (migration `8c4f3a1e6b2d`, since a new table needs one,
+unlike M4/M5's additive-JSONB-field changes), `rogue.persistence.replay`
+mirroring `rogue.persistence.spectrum`'s "resolve inputs, call the pure
+function" shape but persisting on success (`repository.
+CompilationRejectedError` mirrors `ValidationRejectedError` when the plan
+has BLOCKING findings — nothing is persisted in that case). API:
+`POST /scenarios/{id}/versions/{n}/compile` (idempotency-key-wrapped, 201),
+`GET .../replay-plans`, `GET .../replay-plans/{id}` — compiles a
+*published* `ScenarioVersion`, not a draft, keeping the compiler's input
+immutable (rule 11).
+
+Backend test suite grew from 172 to 207 tests: pure-function tests under
+`tests/unit/compiler/` (frequency realization, window packing, channel
+allocation, end-to-end compile determinism), a DB-backed
+`tests/unit/persistence/test_replay.py`, and an HTTP-level
+`tests/unit/api/test_replay_compiler.py` (named to avoid a pytest module-
+name collision with the persistence test file, matching M5's
+`test_spectrum.py`/`test_spectrum_planner.py` precedent). A real "does the
+scenario have an explicit total duration" concept still doesn't exist
+(mission timing is M3's unfinished job) — the compile endpoint takes an
+explicit `duration_s` horizon instead, the same shape as M5's `at_seconds`
+single-instant query, generalized to a span.
 
 ## 4. Git workflow
 
