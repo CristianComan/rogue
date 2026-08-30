@@ -1,8 +1,10 @@
-import type { RecordingReference } from "../../domain/types";
-import { NumberField, TextField } from "./fields";
+import type { IQRecording, RecordingReference } from "../../domain/types";
+import { NumberField } from "./fields";
+import { RecordingPicker } from "./RecordingPicker";
 
 export interface RecordingsListEditorProps {
   recordings: RecordingReference[];
+  catalogue: IQRecording[];
   onChange: (recordings: RecordingReference[]) => void;
 }
 
@@ -10,9 +12,14 @@ export interface RecordingsListEditorProps {
  * A flat add/remove list, not selection-driven (a RecordingReference has
  * no natural map representation) — so RfEmissions have something valid to
  * point at and /validate doesn't immediately flag dangling_recording_
- * reference. No catalogue browsing yet (M4).
+ * reference. `catalogue` (fetched once by EditorLayout) powers the picker;
+ * see RecordingPicker for the fallback when an id isn't in it.
  */
-export function RecordingsListEditor({ recordings, onChange }: RecordingsListEditorProps) {
+export function RecordingsListEditor({
+  recordings,
+  catalogue,
+  onChange,
+}: RecordingsListEditorProps) {
   function updateAt(index: number, patch: Partial<RecordingReference>) {
     onChange(recordings.map((r, i) => (i === index ? { ...r, ...patch } : r)));
   }
@@ -22,7 +29,7 @@ export function RecordingsListEditor({ recordings, onChange }: RecordingsListEdi
   }
 
   function add() {
-    onChange([...recordings, { recording_id: crypto.randomUUID(), version: 1, note: null }]);
+    onChange([...recordings, { recording_id: "", version: 1, note: null }]);
   }
 
   return (
@@ -33,8 +40,8 @@ export function RecordingsListEditor({ recordings, onChange }: RecordingsListEdi
       <strong style={{ fontSize: 12 }}>Recordings</strong>
       {recordings.map((r, i) => (
         <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-          <TextField
-            label="Recording ID"
+          <RecordingPicker
+            recordings={catalogue}
             value={r.recording_id}
             onChange={(recording_id) => updateAt(i, { recording_id })}
           />

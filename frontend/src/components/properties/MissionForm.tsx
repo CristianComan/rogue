@@ -1,6 +1,7 @@
 import type {
   DroneMission,
   DroneRfLink,
+  IQRecording,
   MissionStartPolicy,
   MissionTemplate,
   PlatformCategory,
@@ -36,9 +37,10 @@ export interface MissionFormProps {
   mission: DroneMission;
   onChange: (mission: DroneMission) => void;
   onDelete: () => void;
+  catalogue: IQRecording[];
 }
 
-export function MissionForm({ mission, onChange, onDelete }: MissionFormProps) {
+export function MissionForm({ mission, onChange, onDelete, catalogue }: MissionFormProps) {
   function addRfLink() {
     const newLink: DroneRfLink = {
       id: crypto.randomUUID(),
@@ -177,6 +179,8 @@ export function MissionForm({ mission, onChange, onDelete }: MissionFormProps) {
               link={link}
               onChange={(updated) => updateRfLink(i, updated)}
               onDelete={() => removeRfLink(i)}
+              catalogue={catalogue}
+              platformName={mission.platform.name}
             />
           </div>
         ))}

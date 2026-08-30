@@ -1,8 +1,11 @@
+import { useEffect, useState } from "react";
 import type { Dispatch, ReactNode } from "react";
+import { listRecordings } from "../../api/recordings";
 import { MapCanvas } from "../map/MapCanvas";
 import { PropertiesPane } from "../properties/PropertiesPane";
 import { RecordingsListEditor } from "../properties/RecordingsListEditor";
-import type { ScenarioContent } from "../../domain/types";
+import { ZonesListEditor } from "../properties/ZonesListEditor";
+import type { IQRecording, ScenarioContent } from "../../domain/types";
 import type { EditorAction } from "../../state/editorReducer";
 import { useSelection } from "../../state/selectionContext";
 
@@ -27,6 +30,25 @@ export function EditorLayout({
   timeline,
 }: EditorLayoutProps) {
   const { selection, select } = useSelection();
+  // Fetched once here (not per-form) and passed down to whichever form
+  // needs to resolve/pick a recording — RecordingsListEditor and, via
+  // PropertiesPane -> MissionForm -> RfLinkForm, each emission's picker.
+  const [catalogue, setCatalogue] = useState<IQRecording[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listRecordings({ limit: 200 })
+      .then((recordings) => {
+        if (!cancelled) setCatalogue(recordings);
+      })
+      .catch(() => {
+        // The pickers fall back to plain text entry when the catalogue is
+        // empty/unreachable — not fatal to the editor.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -52,8 +74,12 @@ export function EditorLayout({
           }}
         >
           <div style={{ borderBottom: "1px solid #eee" }}>
+            <ZonesListEditor zones={content.zones} selection={selection} onSelect={select} />
+          </div>
+          <div style={{ borderBottom: "1px solid #eee" }}>
             <RecordingsListEditor
               recordings={content.recordings}
+              catalogue={catalogue}
               onChange={(recordings) => dispatch({ type: "setRecordings", recordings })}
             />
           </div>
@@ -62,6 +88,7 @@ export function EditorLayout({
             selection={selection}
             dispatch={dispatch}
             onClearSelection={() => select(null)}
+            catalogue={catalogue}
           />
         </div>
       </div>

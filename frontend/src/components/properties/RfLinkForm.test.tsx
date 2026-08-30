@@ -24,9 +24,12 @@ function link(overrides: Partial<DroneRfLink> = {}): DroneRfLink {
   };
 }
 
+/** catalogue/platformName aren't exercised by most of these tests — RecordingPicker.test.tsx covers them. */
+const catalogueProps = { catalogue: [], platformName: "Generic Quad" };
+
 describe("RfLinkForm", () => {
   it("shows the scripted-changes editor when mode is scripted", () => {
-    render(<RfLinkForm link={link()} onChange={vi.fn()} onDelete={vi.fn()} />);
+    render(<RfLinkForm link={link()} onChange={vi.fn()} onDelete={vi.fn()} {...catalogueProps} />);
 
     expect(screen.getByTestId("scripted-change-0")).toBeInTheDocument();
     expect(screen.getByText("+ Scripted change")).toBeInTheDocument();
@@ -47,6 +50,7 @@ describe("RfLinkForm", () => {
         })}
         onChange={vi.fn()}
         onDelete={vi.fn()}
+        {...catalogueProps}
       />,
     );
 
@@ -55,7 +59,7 @@ describe("RfLinkForm", () => {
 
   it("switching mode via the select calls onChange with the new mode", () => {
     const onChange = vi.fn();
-    render(<RfLinkForm link={link()} onChange={onChange} onDelete={vi.fn()} />);
+    render(<RfLinkForm link={link()} onChange={onChange} onDelete={vi.fn()} {...catalogueProps} />);
 
     fireEvent.change(screen.getByLabelText("Mode"), { target: { value: "mission_triggered" } });
 
@@ -66,17 +70,85 @@ describe("RfLinkForm", () => {
     );
   });
 
-  it("adds an emission with a placeholder recording pointer", () => {
+  it("adds an emission with an empty recording pointer, PT0S start offset and no duration override", () => {
     const onChange = vi.fn();
-    render(<RfLinkForm link={link()} onChange={onChange} onDelete={vi.fn()} />);
+    render(<RfLinkForm link={link()} onChange={onChange} onDelete={vi.fn()} {...catalogueProps} />);
 
     fireEvent.click(screen.getByText("+ Emission"));
 
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({
         emissions: [
-          expect.objectContaining({ recording: expect.objectContaining({ version: 1 }) }),
+          expect.objectContaining({
+            recording: expect.objectContaining({ recording_id: "", version: 1 }),
+            start_offset: "PT0S",
+            duration_override: null,
+          }),
         ],
+      }),
+    );
+  });
+
+  it("editing start offset and duration override round-trips through onChange", () => {
+    const emission = {
+      id: "e1",
+      recording: { recording_id: "rec-1", version: 1, note: null },
+      start_offset: "PT0S",
+      duration_override: null,
+      gain_offset_db: 0,
+      loop: false,
+      notes: null,
+    };
+    const onChange = vi.fn();
+    render(
+      <RfLinkForm
+        link={link({ emissions: [emission] })}
+        onChange={onChange}
+        onDelete={vi.fn()}
+        {...catalogueProps}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Start offset"), { target: { value: "PT30S" } });
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        emissions: [expect.objectContaining({ start_offset: "PT30S" })],
+      }),
+    );
+
+    fireEvent.change(screen.getByLabelText("Duration override"), { target: { value: "PT5S" } });
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        emissions: [expect.objectContaining({ duration_override: "PT5S" })],
+      }),
+    );
+  });
+
+  it("clearing duration override sets it back to null, not an empty string", () => {
+    const emission = {
+      id: "e1",
+      recording: { recording_id: "rec-1", version: 1, note: null },
+      start_offset: "PT0S",
+      duration_override: "PT5S",
+      gain_offset_db: 0,
+      loop: false,
+      notes: null,
+    };
+    const onChange = vi.fn();
+    render(
+      <RfLinkForm
+        link={link({ emissions: [emission] })}
+        onChange={onChange}
+        onDelete={vi.fn()}
+        {...catalogueProps}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Duration override"), { target: { value: "" } });
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        emissions: [expect.objectContaining({ duration_override: null })],
       }),
     );
   });
