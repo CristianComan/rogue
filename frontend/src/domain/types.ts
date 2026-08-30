@@ -127,6 +127,33 @@ export interface RecordingReference {
   note: string | null;
 }
 
+// mirrors backend/rogue/domain/recording.py:AccessClassification
+export type AccessClassification = "public" | "restricted" | "controlled";
+
+// mirrors backend/rogue/domain/recording.py:IQRecording — the M4 catalogue
+// entry shape returned by GET /recordings (src/api/recordings.ts). Not the
+// same thing as RecordingReference above, which is just an
+// {id, version} pointer an RfEmission embeds.
+export interface IQRecording {
+  id: string;
+  version: number;
+  metadata_object_key: string;
+  data_object_key: string;
+  sha256_metadata: string;
+  sha256_data: string;
+  sample_format: string;
+  sample_rate_hz: number;
+  sample_count: number;
+  duration_s: number;
+  center_frequency_hz: number | null;
+  provenance: string | null;
+  access_classification: AccessClassification;
+  allowed_use_constraints: string[];
+  allowed_frequency_min_hz: number | null;
+  allowed_frequency_max_hz: number | null;
+  extra_sigmf_fields: Record<string, unknown>;
+}
+
 // mirrors backend/rogue/domain/rf.py:RfEmission
 export interface RfEmission {
   id: string;

@@ -1,4 +1,4 @@
-# Checking ROGUE yourself — manual verification guide (M0–M4)
+# Checking ROGUE yourself — manual verification guide (M0–M5)
 
 A hands-on walkthrough for verifying what's been built so far, milestone by
 milestone, without having to read the code. Everything is copy/paste — run
@@ -12,6 +12,7 @@ each block in a terminal from the repo root
 | M2 | Scenario persistence/API | `curl` against a running server |
 | M3 | Map + trajectory editor | clicking around a browser UI |
 | M4 | SigMF recording catalogue | `curl` against a running server |
+| M5 | RF spectrum planner | `curl` against a running server |
 | — | Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`) | run the script, then `curl`/`psql` |
 
 Each section is independent — jump to whichever milestone you want to check.
@@ -24,7 +25,7 @@ cd /home/cristian/Programming/python/26.IC/rogue
 source .venv/bin/activate
 ```
 
-M2/M3/M4 need Postgres and MinIO (S3-compatible storage) running locally.
+M2/M3/M4/M5 need Postgres and MinIO (S3-compatible storage) running locally.
 M0/M1 don't need anything beyond the venv. Check whether the services are up:
 
 ```bash
@@ -60,12 +61,12 @@ Expect: `All checks passed!`
 ```bash
 cd backend && mypy rogue && cd ..
 ```
-Expect: `Success: no issues found in 35 source files`
+Expect: `Success: no issues found in 38 source files`
 
 ```bash
 pytest tests/unit -q
 ```
-Expect: `127 passed`. (If Postgres isn't running, the persistence/API tests
+Expect: `146 passed`. (If Postgres isn't running, the persistence/API tests
 will error out with a connection-refused message — that's the DB, not a
 code problem; go back to section 0.)
 
@@ -76,6 +77,7 @@ pytest tests/unit/test_health.py -v                                  # M0
 pytest tests/unit/domain -v                                          # M1
 pytest tests/unit/persistence/test_repository.py tests/unit/api/test_scenarios.py -v   # M2
 pytest tests/unit/catalogue tests/unit/persistence/test_catalogue.py tests/unit/api/test_recordings.py -v   # M4
+pytest tests/unit/spectrum tests/unit/persistence/test_spectrum.py tests/unit/api/test_spectrum_planner.py -v   # M5
 ```
 (M3 is a frontend feature — its checks are `npm run typecheck`, `npm test`
 and `npm run e2e` from `frontend/`, see the M3 section below.)
@@ -172,6 +174,46 @@ version. This is the same scenario the M3 section below opens in the UI.
 ## M3 — map + trajectory editor
 
 This is a frontend feature — you click through a browser instead of curling.
+
+### Basemap: self-hosted map tiles (one-time, optional but recommended)
+
+The map needs a basemap style to show roads/streets under the scenario's own
+zones/tracks/waypoints/receivers. `MapCanvas.tsx` tries three things in
+order: (1) `VITE_MAP_STYLE_URL` if set — a self-hosted tile service, see
+below; (2) the public `demotiles.maplibre.org` CDN, which isn't reachable
+from every network; (3) a flat offline-color fallback with no basemap detail
+at all, just so the scenario's own layers still render on *something*. For
+real streets, build the self-hosted tiles once:
+
+```bash
+scripts/build_map_tiles.sh
+```
+
+This downloads a Berlin OSM extract (~100MB, cached after the first run)
+plus some shared low-zoom water/coastline datasets planetiler needs
+regardless of area (~1.3GB combined, also cached — this is the slow part,
+only happens once) and builds `map-tiles/berlin.mbtiles`, scoped to the area
+the example/test scenarios already use. Then:
+
+```bash
+docker-compose up -d tiles
+```
+
+`frontend/.env.development` already points a plain `npm run dev` at
+`http://localhost:8081/styles/basic-preview/style.json` (tileserver-gl's
+auto-generated style name for an mbtiles it's given with no config.json —
+confirm at `http://localhost:8081/styles.json` if you rebuild with a
+differently-named file); the `ui` compose service gets the same URL via
+`VITE_MAP_STYLE_URL`. Confirm it's serving real data:
+
+```bash
+curl -s http://localhost:8081/styles/basic-preview/style.json | python3 -m json.tool | head -20
+```
+
+Expect a real MapLibre style document with vector `sources` referencing
+`berlin.mbtiles` (not the flat single-layer fallback). Skip this whole
+section if you don't need to see real map detail — the flat-color fallback
+still lets you verify every other M3 behavior below.
 
 Start the dev server. The machine's Node is now consolidated to a single
 nvm-managed v24 LTS (see `frontend/.nvmrc`), so a plain `npm run dev` from
@@ -344,6 +386,122 @@ psql postgresql://rogue:rogue_dev_only@localhost:5432/rogue \
 
 You should see one row for the recording from step 2 (the rejected one from
 step 3 won't appear — rejects are never written).
+
+## M5 — RF spectrum planner
+
+M5 is a single read-only endpoint,
+`POST /scenarios/{id}/drafts/{id}/spectrum`, that computes deterministic
+spectrum occupancy and conflict/headroom findings for a draft at one
+scenario-time instant — nothing is persisted by calling it. This walkthrough
+sets up a scenario/draft (M2), registers a synthetic recording (M4), attaches
+three overlapping RF links to a mission, and calls the new endpoint.
+
+**1. Scenario + draft** (same pattern as M2):
+
+```bash
+SCENARIO=$(curl -s -X POST http://localhost:8000/scenarios \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "manual-check spectrum scenario",
+    "owner": "manual-check",
+    "area_of_operation": {"type":"Polygon","coordinates":[[[13.0,52.0],[13.6,52.0],[13.6,52.6],[13.0,52.6],[13.0,52.0]]]}
+  }')
+SCENARIO_ID=$(echo "$SCENARIO" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+
+DRAFT=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts \
+  -H "Content-Type: application/json" -d '{"author":"manual-check"}')
+DRAFT_ID=$(echo "$DRAFT" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+```
+
+**2. A synthetic recording** — reuses the same upload script as M4's
+end-to-end section (run that section's `/tmp/upload_test_sigmf.py` first if
+you haven't already):
+
+```bash
+RECORDING=$(curl -s -X POST http://localhost:8000/recordings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "metadata_object_key": "manual-check/test.sigmf-meta",
+    "data_object_key": "manual-check/test.sigmf-data",
+    "provenance": "manual check spectrum"
+  }')
+RECORDING_ID=$(echo "$RECORDING" | python3 -c "import sys,json;print(json.load(sys.stdin)['recording']['id'])")
+```
+
+That recording's `core:sample_rate` is 1 MHz — every occupied band below is
+therefore ±500 kHz around its link's scripted frequency.
+
+**3. Attach three RF links to a mission** — two comfortably inside their
+declared band and 1 MHz apart (so their occupied bands overlap each other),
+plus a third squeezed into a band far narrower than 1 MHz (so its occupied
+band doesn't fit inside its own declared band):
+
+```bash
+curl -s -X PUT http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID \
+  -H "Content-Type: application/json" \
+  -d '{
+    "author": "manual-check",
+    "expected_revision": 0,
+    "zones": [], "receivers": [], "timeline_events": [],
+    "recordings": [{"recording_id": "'"$RECORDING_ID"'", "version": 1}],
+    "missions": [{
+      "name": "recon-1",
+      "platform": {"name": "Quad", "category": "multirotor", "max_speed_mps": 18.0},
+      "trajectory": {
+        "template": "waypoint_transit",
+        "default_speed_mps": 12.0,
+        "waypoints": [
+          {"sequence_index": 0, "position": {"type": "Point", "coordinates": [13.4, 52.2]}, "altitude_m": 100.0},
+          {"sequence_index": 1, "position": {"type": "Point", "coordinates": [13.45, 52.25]}, "altitude_m": 100.0}
+        ]
+      },
+      "rf_links": [
+        {
+          "role": "c2",
+          "band": {"freq_min_hz": 2.4e9, "freq_max_hz": 2.4835e9},
+          "frequency_behaviour": {"mode": "scripted", "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.410e9}]},
+          "emissions": [{"recording": {"recording_id": "'"$RECORDING_ID"'", "version": 1}}]
+        },
+        {
+          "role": "video",
+          "band": {"freq_min_hz": 2.4e9, "freq_max_hz": 2.4835e9},
+          "frequency_behaviour": {"mode": "scripted", "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.4105e9}]},
+          "emissions": [{"recording": {"recording_id": "'"$RECORDING_ID"'", "version": 1}}]
+        },
+        {
+          "role": "telemetry",
+          "band": {"freq_min_hz": 2.4100e9, "freq_max_hz": 2.4102e9},
+          "frequency_behaviour": {"mode": "scripted", "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.4101e9}]},
+          "emissions": [{"recording": {"recording_id": "'"$RECORDING_ID"'", "version": 1}}]
+        }
+      ]
+    }]
+  }' | python3 -m json.tool
+```
+
+**4. Call the spectrum endpoint:**
+
+```bash
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID/spectrum \
+  -H "Content-Type: application/json" -d '{"at_seconds": 0.0}' | python3 -m json.tool
+```
+
+Expect `"occupied_bands"` with 3 entries (one per link, each `bandwidth_hz:
+1000000.0`) and `"findings"` with 4 entries: one `"bandwidth_exceeds_band"`
+finding at `"severity": "blocking"` for the `telemetry` link (its declared
+200 kHz band can't fit a 1 MHz-wide occupied band), and three
+`"spectral_overlap"` findings at `"severity": "warning"` — one per pair of
+links, since all three occupied bands overlap each other. Overlap is
+reported, never rejected — CLAUDE.md's spectrum-planning rule 5 requires
+intentional overlap to stay legal by default.
+
+**5. See an idle link and an unresolved frequency mode (optional).** Change
+`at_seconds` to something far in the future, or add a fourth link with
+`"frequency_behaviour": {"mode": "mission_triggered", "mission_trigger_anchor": "waypoint:1"}`
+and no `scripted_changes` — the mission-triggered link contributes no
+occupied band and instead produces a `"frequency_unresolved"` warning
+finding, since the backend has no mission-time-evaluation engine yet (that
+logic is still frontend-only, M3's `missionEvaluator.ts`).
 
 ## Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`)
 

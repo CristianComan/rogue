@@ -117,13 +117,22 @@ def select_recordings(
         platform = global_fields.get("classification:platform") or global_fields.get(
             "core:description", drone_id
         )
-        scenario = global_fields.get("experiment:scenario", "unknown")
+        # Deliberately not named `scenario` — that name is the outer
+        # function's CLI-filter parameter, and prior to this fix reusing it
+        # here reassigned it, so once one recording's own metadata was read
+        # every *later* drone_id in the loop got silently filtered by that
+        # recording's experiment type instead of the caller's real filter
+        # (or lack of one). Confirmed by running against the 15June2022
+        # corpus: recordings 03/10/15/no_drone (los/los/los/env) were wrongly
+        # skipped after several `air`-experiment drones leaked `scenario="air"`
+        # forward through the loop.
+        recorded_scenario = global_fields.get("experiment:scenario", "unknown")
 
         selections.append(
             {
                 "drone_id": drone_id,
                 "platform": platform,
-                "scenario": scenario,
+                "scenario": recorded_scenario,
                 "meta_path": meta_path,
                 "data_path": data_path,
                 "data_size": os.path.getsize(data_path),

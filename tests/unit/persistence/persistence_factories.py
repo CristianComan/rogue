@@ -22,7 +22,7 @@ from rogue.domain.mission import (
     Trajectory,
     Waypoint,
 )
-from rogue.domain.recording import RecordingReference
+from rogue.domain.recording import AccessClassification, IQRecording, RecordingReference
 from rogue.domain.rf import (
     DroneRfLink,
     FrequencyBehaviour,
@@ -68,6 +68,23 @@ def make_draft(scenario_id: UUID, **overrides: Any) -> ScenarioDraft:
 
 def recording_reference() -> RecordingReference:
     return RecordingReference(recording_id=uuid4(), version=1)
+
+
+def make_recording(**overrides: Any) -> IQRecording:
+    kwargs: dict[str, Any] = {
+        "version": 1,
+        "metadata_object_key": "recordings/demo/v1.sigmf-meta",
+        "data_object_key": "recordings/demo/v1.sigmf-data",
+        "sha256_metadata": "a" * 64,
+        "sha256_data": "a" * 64,
+        "sample_format": "cf32_le",
+        "sample_rate_hz": 2_000_000.0,
+        "sample_count": 2_000_000,
+        "duration_s": 1.0,
+        "access_classification": AccessClassification.RESTRICTED,
+    }
+    kwargs.update(overrides)
+    return IQRecording(**kwargs)
 
 
 def make_mission(recording: RecordingReference, **overrides: Any) -> DroneMission:

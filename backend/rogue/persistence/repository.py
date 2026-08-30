@@ -217,13 +217,14 @@ async def list_versions(session: AsyncSession, scenario_id: UUID) -> list[Scenar
     return [_orm_to_version(row) for row in result.scalars()]
 
 
-async def _build_validation_candidate(
+async def build_candidate_version(
     session: AsyncSession, scenario_id: UUID, draft_id: UUID
 ) -> tuple[ScenarioVersion, list[ValidationFinding]]:
     """Build the not-yet-persisted ScenarioVersion a draft would publish as.
 
-    Shared by ``validate_draft`` (check only, never persisted) and
-    ``publish_draft`` (persisted only if there are no BLOCKING findings).
+    Shared by ``validate_draft`` (check only, never persisted),
+    ``publish_draft`` (persisted only if there are no BLOCKING findings) and
+    ``rogue.persistence.spectrum`` (M5, also read-only).
     """
     if await session.get(ScenarioORM, scenario_id) is None:
         raise NotFoundError(f"scenario {scenario_id} does not exist")
@@ -258,7 +259,7 @@ async def validate_draft(
     session: AsyncSession, scenario_id: UUID, draft_id: UUID
 ) -> list[ValidationFinding]:
     """Run publish-equivalent validation over a draft without persisting anything."""
-    _candidate, findings = await _build_validation_candidate(session, scenario_id, draft_id)
+    _candidate, findings = await build_candidate_version(session, scenario_id, draft_id)
     return findings
 
 
@@ -272,13 +273,13 @@ async def publish_draft(
     rejected. The draft itself is left untouched either way — publishing
     does not delete or lock it.
     """
-    candidate, findings = await _build_validation_candidate(session, scenario_id, draft_id)
+    candidate, findings = await build_candidate_version(session, scenario_id, draft_id)
 
     if any(f.severity == ValidationSeverity.BLOCKING for f in findings):
         raise ValidationRejectedError(findings)
 
     scenario_row = await session.get(ScenarioORM, scenario_id)
-    assert scenario_row is not None  # already validated by _build_validation_candidate
+    assert scenario_row is not None  # already validated by build_candidate_version
 
     published = candidate.model_copy(update={"validation_findings": findings})
 

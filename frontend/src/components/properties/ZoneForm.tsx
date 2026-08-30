@@ -1,5 +1,6 @@
 import type { Zone, ZoneType } from "../../domain/types";
 import { SelectField, TextAreaField, TextField } from "./fields";
+import { ZonePolygonEditor } from "./ZonePolygonEditor";
 
 const ZONE_TYPES: readonly ZoneType[] = [
   "operational_area",
@@ -16,10 +17,10 @@ export interface ZoneFormProps {
 }
 
 /**
- * Non-geometry fields only — drawing/editing the polygon itself is a map
- * interaction deferred out of this pass (see the M3 plan's zone-authoring
- * note); the polygon is authored via the "New scenario" area picker or
- * carried over from a cloned/published version.
+ * Non-geometry fields plus the polygon itself (exterior ring only, via
+ * ZonePolygonEditor) — the polygon can also still come from the "New
+ * scenario" area picker or a cloned/published version, but editing it here
+ * is no longer deferred.
  */
 export function ZoneForm({ zone, onChange, onDelete }: ZoneFormProps) {
   return (
@@ -41,6 +42,13 @@ export function ZoneForm({ zone, onChange, onDelete }: ZoneFormProps) {
         value={zone.notes ?? ""}
         onChange={(notes) => onChange({ ...zone, notes: notes || null })}
       />
+      <fieldset style={{ border: "1px solid #ccc" }}>
+        <legend>Polygon</legend>
+        <ZonePolygonEditor
+          polygon={zone.polygon}
+          onChange={(polygon) => onChange({ ...zone, polygon })}
+        />
+      </fieldset>
       <button type="button" onClick={onDelete} style={{ alignSelf: "flex-start" }}>
         Delete zone
       </button>

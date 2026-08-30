@@ -2,11 +2,13 @@ import type {
   DroneRfLink,
   FrequencySwitchingMode,
   FrequencyTransitionType,
+  IQRecording,
   RfEmission,
   RfLinkRole,
   ScriptedFrequencyChange,
 } from "../../domain/types";
 import { NumberField, SelectField, TextField } from "./fields";
+import { RecordingPicker } from "./RecordingPicker";
 
 const ROLES: readonly RfLinkRole[] = ["c2", "telemetry", "video", "data"];
 const MODES: readonly FrequencySwitchingMode[] = [
@@ -21,6 +23,9 @@ export interface RfLinkFormProps {
   link: DroneRfLink;
   onChange: (link: DroneRfLink) => void;
   onDelete: () => void;
+  /** The owning mission's recording catalogue + platform, for RecordingPicker. */
+  catalogue: IQRecording[];
+  platformName: string;
 }
 
 /**
@@ -29,7 +34,7 @@ export interface RfLinkFormProps {
  * "scripted mode requires scripted_changes"), not a client-side replica of
  * every Pydantic model validator.
  */
-export function RfLinkForm({ link, onChange, onDelete }: RfLinkFormProps) {
+export function RfLinkForm({ link, onChange, onDelete, catalogue, platformName }: RfLinkFormProps) {
   const mode = link.frequency_behaviour.mode;
 
   function updateScriptedChange(index: number, patch: Partial<ScriptedFrequencyChange>) {
@@ -77,7 +82,7 @@ export function RfLinkForm({ link, onChange, onDelete }: RfLinkFormProps) {
   function addEmission() {
     const newEmission: RfEmission = {
       id: crypto.randomUUID(),
-      recording: { recording_id: "00000000-0000-4000-8000-000000000000", version: 1, note: null },
+      recording: { recording_id: "", version: 1, note: null },
       start_offset: "PT0S",
       duration_override: null,
       gain_offset_db: 0,
@@ -169,17 +174,25 @@ export function RfLinkForm({ link, onChange, onDelete }: RfLinkFormProps) {
       <fieldset style={{ border: "1px solid #ccc" }}>
         <legend>Emissions</legend>
         <p style={{ fontSize: 11, color: "#4c5c5e", margin: "0 0 8px" }}>
-          Recording pointers are manually entered UUIDs — there's no catalogue browser yet (M4).
+          Start offset + duration place a recording within this mission's trajectory — an empty
+          duration plays the full recording.
         </p>
         {link.emissions.map((emission, i) => (
           <div
             key={emission.id}
             data-testid={`emission-${i}`}
-            style={{ display: "flex", gap: 8, marginBottom: 6 }}
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+              marginBottom: 6,
+              alignItems: "flex-end",
+            }}
           >
-            <TextField
-              label="Recording ID"
+            <RecordingPicker
+              recordings={catalogue}
               value={emission.recording.recording_id}
+              preferredPlatform={platformName}
               onChange={(recording_id) =>
                 updateEmission(i, { recording: { ...emission.recording, recording_id } })
               }
@@ -190,6 +203,16 @@ export function RfLinkForm({ link, onChange, onDelete }: RfLinkFormProps) {
               onChange={(version) =>
                 updateEmission(i, { recording: { ...emission.recording, version } })
               }
+            />
+            <TextField
+              label="Start offset"
+              value={emission.start_offset}
+              onChange={(start_offset) => updateEmission(i, { start_offset })}
+            />
+            <TextField
+              label="Duration override"
+              value={emission.duration_override ?? ""}
+              onChange={(v) => updateEmission(i, { duration_override: v || null })}
             />
             <NumberField
               label="Gain (dB)"

@@ -1,5 +1,5 @@
 import type { Dispatch } from "react";
-import type { ScenarioContent, TimelineEvent } from "../../domain/types";
+import type { IQRecording, ScenarioContent, TimelineEvent } from "../../domain/types";
 import type { EditorAction } from "../../state/editorReducer";
 import type { Selection } from "../../state/selection";
 import { MissionForm } from "./MissionForm";
@@ -12,6 +12,7 @@ export interface PropertiesPaneProps {
   selection: Selection;
   dispatch: Dispatch<EditorAction>;
   onClearSelection: () => void;
+  catalogue: IQRecording[];
 }
 
 /** Dispatches by selected-object kind to the matching edit form. */
@@ -20,6 +21,7 @@ export function PropertiesPane({
   selection,
   dispatch,
   onClearSelection,
+  catalogue,
 }: PropertiesPaneProps) {
   if (selection === null) {
     return (
@@ -71,6 +73,7 @@ export function PropertiesPane({
             });
             onClearSelection();
           }}
+          catalogue={catalogue}
         />
       );
     }

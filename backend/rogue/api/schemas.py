@@ -68,6 +68,14 @@ class CloneResponse(BaseModel):
     draft_id: UUID
 
 
+class SpectrumStateRequest(BaseModel):
+    """Scenario-time instant to compute deterministic spectrum state at."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    at_seconds: float = Field(ge=0)
+
+
 class RecordingIngestRequest(BaseModel):
     """Register a SigMF asset pair already uploaded to object storage.
 
