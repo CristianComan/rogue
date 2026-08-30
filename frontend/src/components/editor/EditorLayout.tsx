@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 import type { Dispatch, ReactNode } from "react";
 import { listRecordings } from "../../api/recordings";
 import { MapCanvas } from "../map/MapCanvas";
+import { MissionsListEditor } from "../properties/MissionsListEditor";
 import { PropertiesPane } from "../properties/PropertiesPane";
-import { RecordingsListEditor } from "../properties/RecordingsListEditor";
+import { ReceiversListEditor } from "../properties/ReceiversListEditor";
+import { TimelineEventsListEditor } from "../properties/TimelineEventsListEditor";
 import { ZonesListEditor } from "../properties/ZonesListEditor";
 import type { IQRecording, ScenarioContent } from "../../domain/types";
 import type { EditorAction } from "../../state/editorReducer";
@@ -31,8 +33,8 @@ export function EditorLayout({
 }: EditorLayoutProps) {
   const { selection, select } = useSelection();
   // Fetched once here (not per-form) and passed down to whichever form
-  // needs to resolve/pick a recording — RecordingsListEditor and, via
-  // PropertiesPane -> MissionForm -> RfLinkForm, each emission's picker.
+  // needs to resolve/pick a recording — via PropertiesPane -> MissionForm ->
+  // RfLinkForm, each emission's picker.
   const [catalogue, setCatalogue] = useState<IQRecording[]>([]);
 
   useEffect(() => {
@@ -69,6 +71,7 @@ export function EditorLayout({
             flex: "0 0 340px",
             borderLeft: "1px solid #ccc",
             overflowY: "auto",
+            overflowX: "auto",
             display: "flex",
             flexDirection: "column",
           }}
@@ -77,10 +80,24 @@ export function EditorLayout({
             <ZonesListEditor zones={content.zones} selection={selection} onSelect={select} />
           </div>
           <div style={{ borderBottom: "1px solid #eee" }}>
-            <RecordingsListEditor
-              recordings={content.recordings}
-              catalogue={catalogue}
-              onChange={(recordings) => dispatch({ type: "setRecordings", recordings })}
+            <MissionsListEditor
+              missions={content.missions}
+              selection={selection}
+              onSelect={select}
+            />
+          </div>
+          <div style={{ borderBottom: "1px solid #eee" }}>
+            <ReceiversListEditor
+              receivers={content.receivers}
+              selection={selection}
+              onSelect={select}
+            />
+          </div>
+          <div style={{ borderBottom: "1px solid #eee" }}>
+            <TimelineEventsListEditor
+              events={content.timeline_events}
+              selection={selection}
+              onSelect={select}
             />
           </div>
           <PropertiesPane

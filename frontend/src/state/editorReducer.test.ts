@@ -74,12 +74,6 @@ describe("editorReducer", () => {
     );
   });
 
-  it("setRecordings marks dirty", () => {
-    expect(editorReducer(initialEditorState, { type: "setRecordings", recordings: [] }).dirty).toBe(
-      true,
-    );
-  });
-
   it("savedSuccessfully updates revision and clears dirty", () => {
     const dirty: EditorState = { ...initialEditorState, dirty: true, revision: 1 };
     const next = editorReducer(dirty, { type: "savedSuccessfully", revision: 5 });

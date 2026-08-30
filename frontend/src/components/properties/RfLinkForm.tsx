@@ -146,7 +146,7 @@ export function RfLinkForm({ link, onChange, onDelete, catalogue, platformName }
 
       <fieldset style={{ border: "1px solid #ccc" }}>
         <legend>Band</legend>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <NumberField
             label="Min (Hz)"
             value={link.band.freq_min_hz}
@@ -176,7 +176,11 @@ export function RfLinkForm({ link, onChange, onDelete, catalogue, platformName }
         {mode === "scripted" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
             {link.frequency_behaviour.scripted_changes.map((change, i) => (
-              <div key={i} data-testid={`scripted-change-${i}`} style={{ display: "flex", gap: 8 }}>
+              <div
+                key={i}
+                data-testid={`scripted-change-${i}`}
+                style={{ display: "flex", gap: 8, flexWrap: "wrap" }}
+              >
                 <TextField
                   label="At offset"
                   value={change.at_offset}
@@ -222,20 +226,29 @@ export function RfLinkForm({ link, onChange, onDelete, catalogue, platformName }
               data-testid={`emission-${i}`}
               style={{
                 display: "flex",
-                flexWrap: "wrap",
-                gap: 8,
-                marginBottom: 6,
-                alignItems: "flex-end",
+                flexDirection: "column",
+                gap: 6,
+                marginBottom: 10,
+                padding: 8,
+                border: "1px solid #eee",
+                minWidth: 0,
               }}
             >
-              <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
-                <input
-                  type="checkbox"
-                  checked={isSilent}
-                  onChange={(e) => toggleSilence(i, e.target.checked)}
-                />
-                Silence
-              </label>
+              <div
+                style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
+              >
+                <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
+                  <input
+                    type="checkbox"
+                    checked={isSilent}
+                    onChange={(e) => toggleSilence(i, e.target.checked)}
+                  />
+                  Silence
+                </label>
+                <button type="button" onClick={() => removeEmission(i)}>
+                  Remove
+                </button>
+              </div>
               {!isSilent && emission.recording && (
                 <>
                   <RecordingPicker
@@ -257,32 +270,33 @@ export function RfLinkForm({ link, onChange, onDelete, catalogue, platformName }
                   />
                 </>
               )}
-              <TextField
-                label="Start offset"
-                value={emission.start_offset}
-                onChange={(start_offset) => updateEmission(i, { start_offset })}
-              />
-              <TextField
-                label={isSilent ? "Duration (required)" : "Duration override"}
-                value={emission.duration_override ?? ""}
-                onChange={(v) => updateEmission(i, { duration_override: v || null })}
-              />
-              <NumberField
-                label="Gain (dB)"
-                value={emission.gain_offset_db}
-                onChange={(gain_offset_db) => updateEmission(i, { gain_offset_db })}
-              />
-              <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
-                <input
-                  type="checkbox"
-                  checked={emission.loop}
-                  onChange={(e) => updateEmission(i, { loop: e.target.checked })}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", minWidth: 0 }}>
+                <TextField
+                  label="Start offset"
+                  value={emission.start_offset}
+                  onChange={(start_offset) => updateEmission(i, { start_offset })}
                 />
-                Loop
-              </label>
-              <button type="button" onClick={() => removeEmission(i)}>
-                Remove
-              </button>
+                <TextField
+                  label={isSilent ? "Duration (required)" : "Duration override"}
+                  value={emission.duration_override ?? ""}
+                  onChange={(v) => updateEmission(i, { duration_override: v || null })}
+                />
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <NumberField
+                  label="Gain (dB)"
+                  value={emission.gain_offset_db}
+                  onChange={(gain_offset_db) => updateEmission(i, { gain_offset_db })}
+                />
+                <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
+                  <input
+                    type="checkbox"
+                    checked={emission.loop}
+                    onChange={(e) => updateEmission(i, { loop: e.target.checked })}
+                  />
+                  Loop
+                </label>
+              </div>
             </div>
           );
         })}

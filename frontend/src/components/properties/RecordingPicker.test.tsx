@@ -93,4 +93,13 @@ describe("RecordingPicker", () => {
 
     expect(screen.getByPlaceholderText("recording UUID")).toHaveValue("legacy-id");
   });
+
+  it("selecting 'Custom UUID…' with no value typed yet still shows the text input", () => {
+    const recordings = [recording({ id: "r1" })];
+    render(<RecordingPicker recordings={recordings} value="" onChange={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText("Recording"), { target: { value: "__custom__" } });
+
+    expect(screen.getByPlaceholderText("recording UUID")).toBeInTheDocument();
+  });
 });

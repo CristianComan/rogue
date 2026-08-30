@@ -168,8 +168,9 @@ def test_publish_idempotency_key_replays_same_version(client: TestClient) -> Non
     assert len(versions) == 1
 
 
-def test_publish_rejects_dangling_reference_with_findings(client: TestClient) -> None:
+def test_publish_rejects_overlapping_emissions_with_findings(client: TestClient) -> None:
     scenario = _create_scenario(client)
+    recording = {"recording_id": "00000000-0000-4000-8000-000000000001", "version": 1}
     mission = {
         "name": "recon-1",
         "platform": {"name": "Quad", "category": "multirotor", "max_speed_mps": 18.0},
@@ -198,23 +199,70 @@ def test_publish_rejects_dangling_reference_with_findings(client: TestClient) ->
                     "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.412e9}],
                 },
                 "emissions": [
-                    {
-                        "recording": {
-                            "recording_id": "00000000-0000-4000-8000-000000000001",
-                            "version": 1,
-                        }
-                    }
+                    {"recording": recording, "start_offset": "PT0S", "duration_override": "PT10S"},
+                    {"recording": recording, "start_offset": "PT5S", "duration_override": "PT10S"},
                 ],
             }
         ],
     }
-    draft = _create_draft(client, scenario["id"], missions=[mission], recordings=[])
+    draft = _create_draft(client, scenario["id"], missions=[mission])
 
     response = client.post(f"/scenarios/{scenario['id']}/drafts/{draft['id']}/publish")
 
     assert response.status_code == 422
-    assert any(f["code"] == "dangling_recording_reference" for f in response.json()["findings"])
+    assert any(f["code"] == "overlapping_emissions" for f in response.json()["findings"])
     assert client.get(f"/scenarios/{scenario['id']}/versions").json() == []
+
+
+def test_create_draft_derives_recordings_from_emissions(client: TestClient) -> None:
+    scenario = _create_scenario(client)
+    recording = {"recording_id": "00000000-0000-4000-8000-000000000002", "version": 3}
+    mission = {
+        "name": "recon-1",
+        "platform": {"name": "Quad", "category": "multirotor", "max_speed_mps": 18.0},
+        "trajectory": {
+            "template": "waypoint_transit",
+            "default_speed_mps": 12.0,
+            "waypoints": [
+                {
+                    "sequence_index": 0,
+                    "position": {"type": "Point", "coordinates": [13.4, 52.2]},
+                    "altitude_m": 100.0,
+                },
+                {
+                    "sequence_index": 1,
+                    "position": {"type": "Point", "coordinates": [13.45, 52.25]},
+                    "altitude_m": 100.0,
+                },
+            ],
+        },
+        "rf_links": [
+            {
+                "role": "c2",
+                "band": {"freq_min_hz": 2.4e9, "freq_max_hz": 2.4835e9},
+                "frequency_behaviour": {
+                    "mode": "scripted",
+                    "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.412e9}],
+                },
+                "emissions": [{"recording": recording}],
+            }
+        ],
+    }
+
+    draft = _create_draft(client, scenario["id"], missions=[mission])
+
+    assert draft["recordings"] == [{**recording, "note": None}]
+
+
+def test_create_draft_rejects_client_supplied_recordings(client: TestClient) -> None:
+    scenario = _create_scenario(client)
+
+    response = client.post(
+        f"/scenarios/{scenario['id']}/drafts",
+        json={"author": "test-operator", "recordings": []},
+    )
+
+    assert response.status_code == 422
 
 
 def test_get_and_list_versions(client: TestClient) -> None:

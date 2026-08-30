@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from rogue.domain.common import GeoPolygon
 from rogue.domain.mission import DroneMission
 from rogue.domain.receiver import Receiver
-from rogue.domain.recording import AccessClassification, RecordingKind, RecordingReference
+from rogue.domain.recording import AccessClassification, RecordingKind
 from rogue.domain.scenario import Zone
 from rogue.domain.timeline import TimelineEvent
 
@@ -33,7 +33,13 @@ class ScenarioCreateRequest(BaseModel):
 
 
 class DraftContent(BaseModel):
-    """Content fields shared by draft-create and draft-update requests."""
+    """Content fields shared by draft-create and draft-update requests.
+
+    No ``recordings`` field: it's never client-authored — the server always
+    derives it from ``missions[].rf_links[].emissions[]`` via
+    ``rogue.domain.scenario.derive_recording_references``. A request body
+    still including a ``recordings`` key gets a 422 from ``extra="forbid"``.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -42,7 +48,6 @@ class DraftContent(BaseModel):
     missions: list[DroneMission] = Field(default_factory=list)
     receivers: list[Receiver] = Field(default_factory=list)
     timeline_events: list[TimelineEvent] = Field(default_factory=list)
-    recordings: list[RecordingReference] = Field(default_factory=list)
 
 
 class DraftCreateRequest(DraftContent):

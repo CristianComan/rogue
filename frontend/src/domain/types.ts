@@ -325,13 +325,19 @@ export interface Scenario {
   updated_at: string;
 }
 
-/** Content fields shared by ScenarioDraft and ScenarioVersion. */
+/**
+ * Editable content fields shared by draft-create/update requests and the
+ * local editor state. No `recordings` here — it's never client-authored,
+ * the server always derives it from `missions[].rf_links[].emissions[]`
+ * (backend/rogue/domain/scenario.py:derive_recording_references). It shows
+ * up only on the full ScenarioDraft/ScenarioVersion response shapes below,
+ * alongside their other server-assigned fields.
+ */
 export interface ScenarioContent {
   zones: Zone[];
   missions: DroneMission[];
   receivers: Receiver[];
   timeline_events: TimelineEvent[];
-  recordings: RecordingReference[];
 }
 
 // mirrors backend/rogue/domain/scenario.py:ScenarioDraft
@@ -341,6 +347,7 @@ export interface ScenarioDraft extends ScenarioContent {
   base_version_id: string | null;
   revision: number;
   author: string;
+  recordings: RecordingReference[];
   created_at: string;
   updated_at: string;
 }
@@ -363,6 +370,7 @@ export interface ScenarioVersion extends ScenarioContent {
   version_number: number;
   schema_version: string;
   author: string;
+  recordings: RecordingReference[];
   change_note: string | null;
   validation_findings: ValidationFinding[];
 }

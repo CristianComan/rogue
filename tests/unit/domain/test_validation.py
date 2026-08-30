@@ -25,13 +25,6 @@ def test_valid_scenario_version_has_no_blocking_findings() -> None:
     assert all(f.severity != ValidationSeverity.BLOCKING for f in findings)
 
 
-def test_dangling_recording_reference_is_blocking() -> None:
-    version = ScenarioVersion(**scenario_version_kwargs(recordings=[]))
-    findings = validate_scenario_version(version)
-    codes = {f.code for f in findings if f.severity == ValidationSeverity.BLOCKING}
-    assert "dangling_recording_reference" in codes
-
-
 def test_dangling_mission_reference_on_timeline_event_is_blocking() -> None:
     dangling_event = MissionRelativeTimelineEvent(
         mission_id=uuid4(), anchor=MissionRelativeAnchor.MISSION_START

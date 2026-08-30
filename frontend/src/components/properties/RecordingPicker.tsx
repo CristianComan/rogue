@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { IQRecording } from "../../domain/types";
 
 const CUSTOM_VALUE = "__custom__";
@@ -48,15 +49,38 @@ export function RecordingPicker({
     : [];
   const matchingIds = new Set(matching.map((r) => r.id));
   const others = recordings.filter((r) => !matchingIds.has(r.id));
-  const isCustom = value !== "" && !recordings.some((r) => r.id === value);
+  // "Custom UUID…" needs its own flag, not just an inference from `value` —
+  // a value of "" is indistinguishable from "nothing selected yet" if
+  // inferred, so choosing "Custom UUID…" with nothing typed yet would
+  // silently fall back to the placeholder instead of showing the text input.
+  const [forceCustom, setForceCustom] = useState(false);
+  const isCustom = forceCustom || (value !== "" && !recordings.some((r) => r.id === value));
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-      <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 12 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 2, width: "100%", minWidth: 0 }}>
+      <label
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 2,
+          fontSize: 12,
+          width: "100%",
+          minWidth: 0,
+        }}
+      >
         Recording
         <select
           value={isCustom ? CUSTOM_VALUE : value}
-          onChange={(e) => onChange(e.target.value === CUSTOM_VALUE ? "" : e.target.value)}
+          onChange={(e) => {
+            if (e.target.value === CUSTOM_VALUE) {
+              setForceCustom(true);
+              onChange("");
+            } else {
+              setForceCustom(false);
+              onChange(e.target.value);
+            }
+          }}
+          style={{ width: "100%", minWidth: 0 }}
         >
           <option value="" disabled>
             Select a recording…
@@ -86,6 +110,7 @@ export function RecordingPicker({
           value={value}
           placeholder="recording UUID"
           onChange={(e) => onChange(e.target.value)}
+          style={{ width: "100%", minWidth: 0, boxSizing: "border-box" }}
         />
       )}
     </div>

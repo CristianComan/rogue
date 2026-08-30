@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 from persistence_factories import (
     area_polygon,
@@ -12,8 +14,28 @@ from persistence_factories import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from rogue.domain.rf import RfEmission
+from rogue.domain.scenario import derive_recording_references
 from rogue.domain.validation import ValidationSeverity
 from rogue.persistence import repository
+
+
+def _mission_with_overlapping_emissions(ref: object) -> object:
+    """A mission whose single RfLink has two emissions overlapping 5s-10s."""
+    mission = make_mission(ref)
+    link = mission.rf_links[0]
+    overlapping = [
+        RfEmission(
+            recording=ref, start_offset=timedelta(0), duration_override=timedelta(seconds=10)
+        ),
+        RfEmission(
+            recording=ref,
+            start_offset=timedelta(seconds=5),
+            duration_override=timedelta(seconds=10),
+        ),
+    ]
+    updated_link = link.model_copy(update={"emissions": overlapping})
+    return mission.model_copy(update={"rf_links": [updated_link]})
 
 
 async def test_create_and_get_scenario_round_trips_geometry(session: AsyncSession) -> None:
@@ -121,27 +143,37 @@ async def test_validate_draft_does_not_persist_anything(session: AsyncSession) -
     await repository.create_scenario(session, scenario)
 
     ref = recording_reference()
-    draft = make_draft(scenario_id=scenario.id, missions=[make_mission(ref)], recordings=[])
+    mission = _mission_with_overlapping_emissions(ref)
+    draft = make_draft(
+        scenario_id=scenario.id,
+        missions=[mission],
+        recordings=derive_recording_references([mission]),
+    )
     await repository.create_draft(session, draft)
 
     findings = await repository.validate_draft(session, scenario.id, draft.id)
 
-    assert any(f.code == "dangling_recording_reference" for f in findings)
+    assert any(f.code == "overlapping_emissions" for f in findings)
     assert await repository.list_versions(session, scenario.id) == []
 
 
-async def test_publish_rejects_dangling_recording_reference(session: AsyncSession) -> None:
+async def test_publish_rejects_overlapping_emissions(session: AsyncSession) -> None:
     scenario = make_scenario()
     await repository.create_scenario(session, scenario)
 
     ref = recording_reference()
-    draft = make_draft(scenario_id=scenario.id, missions=[make_mission(ref)], recordings=[])
+    mission = _mission_with_overlapping_emissions(ref)
+    draft = make_draft(
+        scenario_id=scenario.id,
+        missions=[mission],
+        recordings=derive_recording_references([mission]),
+    )
     await repository.create_draft(session, draft)
 
     with pytest.raises(repository.ValidationRejectedError) as exc_info:
         await repository.publish_draft(session, scenario.id, draft.id)
 
-    assert any(f.code == "dangling_recording_reference" for f in exc_info.value.findings)
+    assert any(f.code == "overlapping_emissions" for f in exc_info.value.findings)
     assert await repository.list_versions(session, scenario.id) == []
 
 

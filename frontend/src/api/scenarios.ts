@@ -64,7 +64,6 @@ function fullContent(input: DraftContentInput): ScenarioContent & { author: stri
     missions: input.missions ?? [],
     receivers: input.receivers ?? [],
     timeline_events: input.timeline_events ?? [],
-    recordings: input.recordings ?? [],
   };
 }
 

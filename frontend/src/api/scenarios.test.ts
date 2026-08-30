@@ -64,11 +64,17 @@ describe("scenarios API client", () => {
           missions: [],
           receivers: [],
           timeline_events: [],
-          recordings: [],
           base_version_id: null,
         }),
       }),
     );
+  });
+
+  it("createDraft never sends a recordings field — the server always derives it", async () => {
+    await createDraft("s1", { author: "op" });
+
+    const [, options] = vi.mocked(client.request).mock.calls[0];
+    expect(options?.body).not.toHaveProperty("recordings");
   });
 
   it("getDraft GETs the draft path", async () => {

@@ -4,17 +4,26 @@ the local M4 catalogue (see docs/testing/manual-verification-guide.md).
 
 Expects a source layout of ``<source_root>/<drone_id>/**/*.sigmf-meta`` (plus
 matching ``.sigmf-data``), where ``<drone_id>`` is one subdirectory per drone
-class (e.g. ``00``, ``01``, ...) or a baseline like ``no_drone`` — the layout
-of the "Droids_data11" AIR-T/Deepwave capture campaigns. For each drone_id
-directory this picks one file: by default, the first ``exp=air`` recording
-at 2.45GHz if present, else the first ``exp=los``, then ``exp=env``,
-``exp=controller``, ``exp=both``, ``exp=nlos``, then just the first
-recording found — preferring ``fnum=0000000000`` when multiple takes exist.
-Pass ``--scenario``/``--band`` to target a specific experiment instead (e.g.
-``--scenario both --band 5800e6`` for "drone and controller both
-transmitting, 5.8GHz band"); drone_id directories with no matching
-recording are skipped rather than falling back. Platform name is read from
-each recording's own ``classification:platform`` SigMF field.
+class (e.g. ``00``, ``01``, ...) or the ``no_drone`` baseline — the layout of
+the "Droids_data11" AIR-T/Deepwave capture campaigns. The 15June2022
+campaign's fifteen drone_id subdirectories cover, per its own README: Mavic
+2 Pro, Matrice 300, SG907, DX5e Spektrum, Parrot ANAFI, VISUO, EX5, E520s,
+Tello, G2P Pro Cam Drone, JD Flying Saucer Aircraft, Hubsan, K911, Yuneec
+Mantis G, Zyma, plus ``no_drone`` — but which drone_id maps to which name is
+never assumed here; platform name is always read from each recording's own
+``classification:platform`` SigMF field, never from this list or the
+directory name. ``no_drone`` is registered with ``kind="background"``
+(RecordingKind.BACKGROUND) since it's an ambient/no-signal capture, not a
+signal of interest; every other drone_id defaults to ``kind="signal"``.
+
+For each drone_id directory this picks one file: by default, the first
+``exp=air`` recording at 2.45GHz if present, else the first ``exp=los``,
+then ``exp=env``, ``exp=controller``, ``exp=both``, ``exp=nlos``, then just
+the first recording found — preferring ``fnum=0000000000`` when multiple
+takes exist. Pass ``--scenario``/``--band`` to target a specific experiment
+instead (e.g. ``--scenario both --band 5800e6`` for "drone and controller
+both transmitting, 5.8GHz band"); drone_id directories with no matching
+recording are skipped rather than falling back.
 
 Uploads the selected ``.sigmf-meta``/``.sigmf-data`` pair to the configured
 S3-compatible bucket in 8MB chunks (never buffers a full recording in memory,
@@ -133,6 +142,7 @@ def select_recordings(
                 "drone_id": drone_id,
                 "platform": platform,
                 "scenario": recorded_scenario,
+                "kind": "background" if drone_id == "no_drone" else "signal",
                 "meta_path": meta_path,
                 "data_path": data_path,
                 "data_size": os.path.getsize(data_path),
@@ -157,11 +167,11 @@ def upload_and_register(
 
     results = []
     for sel in selections:
-        drone_id, platform = sel["drone_id"], sel["platform"]
+        drone_id, platform, kind = sel["drone_id"], sel["platform"], sel["kind"]
         meta_key = f"drone-corpus/{campaign}/{drone_id}/{os.path.basename(sel['meta_path'])}"
         data_key = f"drone-corpus/{campaign}/{drone_id}/{os.path.basename(sel['data_path'])}"
 
-        print(f"[{drone_id}] {platform}: uploading to {settings.s3_bucket}...")
+        print(f"[{drone_id}] {platform} ({kind}): uploading to {settings.s3_bucket}...")
         s3.upload_file(sel["meta_path"], settings.s3_bucket, meta_key, Config=transfer_config)
         s3.upload_file(sel["data_path"], settings.s3_bucket, data_key, Config=transfer_config)
 
@@ -176,6 +186,7 @@ def upload_and_register(
                 "metadata_object_key": meta_key,
                 "data_object_key": data_key,
                 "provenance": provenance,
+                "kind": kind,
                 "access_classification": access_classification,
             },
         )
@@ -233,7 +244,9 @@ def main() -> int:
     total_mb = sum(s["data_size"] for s in selections) / 1e6
     print(f"{len(selections)} recordings selected ({total_mb:.1f} MB total):")
     for s in selections:
-        print(f"  {s['drone_id']:>10}  {s['platform']:<30} scenario={s['scenario']}")
+        print(
+            f"  {s['drone_id']:>10}  {s['platform']:<30} scenario={s['scenario']} kind={s['kind']}"
+        )
 
     if args.dry_run:
         return 0

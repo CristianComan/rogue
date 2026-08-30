@@ -26,3 +26,13 @@ body,
 body {
   overflow: hidden;
 }
+
+/* Browsers default <fieldset> to min-width: min-content, which refuses to
+   shrink below its content's natural width — inside the fixed-width
+   properties column (EditorLayout.tsx), this forced every property form
+   (ZoneForm, MissionForm, RfLinkForm, ...) wider than the column regardless
+   of flexWrap/overflow rules applied to their contents, pushing fields like
+   RfLinkForm's emission "Version" input past the visible area. */
+fieldset {
+  min-width: 0;
+}

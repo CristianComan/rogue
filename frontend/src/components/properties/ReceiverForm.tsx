@@ -40,7 +40,7 @@ export function ReceiverForm({ receiver, onChange, onDelete }: ReceiverFormProps
         options={RECEIVER_TYPES}
         onChange={setReceiverType}
       />
-      <div style={{ display: "flex", gap: 8 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <NumberField
           label="Lon"
           value={coords[0]}
@@ -66,7 +66,7 @@ export function ReceiverForm({ receiver, onChange, onDelete }: ReceiverFormProps
         />
       )}
       {receiver.receiver_type === "aoa_doa" && (
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <NumberField
             label="Offset E (m)"
             value={offset[0]}

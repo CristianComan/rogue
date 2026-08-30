@@ -103,15 +103,38 @@ and M5's dependencies (scenario domain model + catalogue) rather than blocking o
 - **Authoring UI**: `RfLinkForm.tsx` gained a "Silence" toggle per emission and a non-binding
   "Resource preference" section (`ResourcePreference.preferred_agent_tags`/`required_sync_class`/
   `notes` — already modelled in M1, never previously exposed in the UI). This is a preference only;
-  it does not bind a scenario to a specific SDR/device (CLAUDE.md rule 1, ADR-002).
+  it does not bind a scenario to a specific SDR/device (CLAUDE.md rule 1, ADR-002). The properties
+  column also gained `MissionsListEditor`/`ReceiversListEditor`/`TimelineEventsListEditor` (mirroring
+  the existing `ZonesListEditor`) — previously a mission/receiver could only be selected by clicking
+  its map feature, and a timeline event (no geometry at all) had no way to be re-selected once
+  deselected.
+- **`ScenarioDraft`/`ScenarioVersion.recordings` is now always server-derived**, never
+  hand-authored. It used to be a flat list edited through a standalone `RecordingsListEditor` panel,
+  disconnected from where recordings are actually scheduled — `Mission -> RfLink -> RfEmission`
+  already carries that (with `start_offset`/`duration_override`/`loop`). Checking its only consumer
+  found it was `validate_scenario_version`'s `dangling_recording_reference` check, which verified
+  self-consistency against that same hand-authored list and nothing about the real catalogue — so it
+  came out too, as structurally unreachable once the list can no longer diverge from the emissions
+  that populate it. `derive_recording_references` (`backend/rogue/domain/scenario.py`) now builds it
+  by walking `missions[].rf_links[].emissions[]` at draft create/update time; `DraftContent`
+  (`api/schemas.py`) no longer accepts `recordings` as client input (422 if sent);
+  `RecordingsListEditor.tsx` is deleted. The field stays on the schema for backward
+  read-compatibility (`extra="forbid"` on `RogueModel` would otherwise break reading every existing
+  stored draft/version) and as a useful denormalized manifest. While fixing the e2e coverage for
+  this, also fixed a real pre-existing bug in `RecordingPicker.tsx`: selecting "Custom UUID…" reset
+  the value to `""`, which doesn't count as "custom" by the component's own check, so the text input
+  never appeared.
 - **ADR-005** (`docs/decisions/ADR-005-sdr-adapter-library-choice.md`) records a related but
   separate decision reached while scoping this work: SDR adapters stay split by vendor library
   (native UHD for X440, native SoapySDR for AIR7311) rather than unified via SoapyUHD, and
   `SoapyRemote` stays diagnostics-only, never the production access path. No adapter code was
   written — that's still M9/M10, per CLAUDE.md's explicit sequencing rule.
 
-Backend (164 tests) and frontend (115 tests) both green as of this increment; e2e coverage for the
-new silence/overlap/waterfall paths and full manual browser verification are still outstanding.
+Backend (172 tests) and frontend (118 tests) both green as of this increment, plus a 3-test
+Playwright e2e suite covering create→validate→save→publish, overlapping-emissions publish
+rejection, and 409 stale-revision conflicts. A real "does this recording exist in the catalogue"
+validation still doesn't exist (the retired check never actually verified that either) — flagged as
+a natural follow-up, not bundled into this pass.
 
 ## 4. Git workflow
 

@@ -62,32 +62,16 @@ def validate_scenario_version(version: ScenarioVersion) -> list[ValidationFindin
     """
     findings: list[ValidationFinding] = []
 
-    known_recording_ids = {ref.recording_id for ref in version.recordings}
+    # No dangling-recording-reference check here: ScenarioVersion.recordings
+    # is always derived from these same emissions
+    # (domain.scenario.derive_recording_references), never authored
+    # separately, so an emission's recording can never be missing from it.
     known_mission_ids = {mission.id for mission in version.missions}
 
     for mission_index, mission in enumerate(version.missions):
         for link_index, link in enumerate(mission.rf_links):
             resolved_spans: list[tuple[int, float, float]] = []
             for emission_index, emission in enumerate(link.emissions):
-                if (
-                    emission.recording is not None
-                    and emission.recording.recording_id not in known_recording_ids
-                ):
-                    findings.append(
-                        ValidationFinding(
-                            severity=ValidationSeverity.BLOCKING,
-                            code="dangling_recording_reference",
-                            message=(
-                                f"RfEmission references recording "
-                                f"{emission.recording.recording_id} which is not listed in "
-                                "ScenarioVersion.recordings"
-                            ),
-                            path=(
-                                f"missions[{mission_index}].rf_links[{link_index}]"
-                                f".emissions[{emission_index}].recording.recording_id"
-                            ),
-                        )
-                    )
                 span = _resolvable_span_seconds(emission)
                 if span is not None:
                     resolved_spans.append((emission_index, span[0], span[1]))
