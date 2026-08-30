@@ -102,6 +102,26 @@ class ScenarioVersionORM(Base):
     )
 
 
+class IQRecordingORM(Base):
+    """Immutable SigMF catalogue entry version — see ``rogue.domain.recording.IQRecording``.
+
+    Rows are immutable once inserted, like ``scenario_versions``: no
+    UPDATE/DELETE is ever issued against this table (see
+    ``rogue.persistence.catalogue``). ``access_classification`` and
+    ``provenance`` are duplicated out of ``document`` purely so the
+    catalogue list endpoint can filter on them.
+    """
+
+    __tablename__ = "iq_recordings"
+
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    access_classification: Mapped[str] = mapped_column(String, nullable=False)
+    provenance: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class IdempotencyKeyORM(Base):
     """Cached response for a replayed mutating request, keyed per endpoint."""
 

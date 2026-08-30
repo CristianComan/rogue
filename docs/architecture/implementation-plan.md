@@ -10,9 +10,9 @@ Build ROGUE in bounded, testable increments. Do not begin with hardware-specific
 |---|---|---|---|
 | M0 | Repository, architecture docs, CI, Compose, UI/API shell, simulated agent | one-command local environment and health tests | Done |
 | M1 | Scenario domain model | typed/versioned scenario round-trip with tests | Done — `backend/rogue/domain/`, merged to `develop` |
-| M2 | Scenario persistence/API | draft/version/clone/validation APIs | In progress — `feature/scenario-persistence-api` |
-| M3 | Map + trajectory editor | multi-drone scenario visual playback | Planned |
-| M4 | SigMF catalogue | validated immutable recording assets | Planned |
+| M2 | Scenario persistence/API | draft/version/clone/validation APIs | Done — `feature/scenario-persistence-api`, merged to `develop` |
+| M3 | Map + trajectory editor | multi-drone scenario visual playback | Done — `feature/map-trajectory-editor`, merged to `develop` |
+| M4 | SigMF catalogue | validated immutable recording assets | In progress — `feature/sigmf-catalogue` |
 | M5 | RF spectrum planner | deterministic spectrum state and conflict/headroom findings | Planned |
 | M6 | Replay Plan compiler | scenario compiles to hardware-neutral executable plan | Planned |
 | M7 | Simulated SDR execution | full prepare/arm/start/stop without hardware | Planned |
@@ -35,14 +35,35 @@ constraints, under `backend/rogue/domain/` with tests in `tests/unit/domain/` an
 scenario at `examples/scenarios/single-drone-orbit.yaml`. `ScenarioRun`/Replay Plan were
 intentionally not modelled (M6+). SDR control was not implemented in this feature.
 
-### M2 — Scenario persistence/API (in progress)
+### M2 — Scenario persistence/API (done)
 
-Branch `feature/scenario-persistence-api`. Persist `Scenario`/`ScenarioDraft`/`ScenarioVersion`
-(SQLAlchemy 2 + PostgreSQL/PostGIS, Alembic migrations) and expose FastAPI endpoints for draft
-CRUD, publish (draft → immutable `ScenarioVersion`), clone, list/search and a validation endpoint
-wrapping `validate_scenario_version`. Reuse the M1 domain models as the request/response shape;
-do not fork a parallel schema. Do not implement the map/trajectory UI (M3) or SigMF ingest (M4)
-in this feature.
+Implemented in `feature/scenario-persistence-api` (merged to `develop`). Persists
+`Scenario`/`ScenarioDraft`/`ScenarioVersion` (SQLAlchemy 2 + PostgreSQL/PostGIS, Alembic
+migrations) and exposes FastAPI endpoints for draft CRUD, publish (draft → immutable
+`ScenarioVersion`), clone, list/search and a validation endpoint wrapping
+`validate_scenario_version`. Reuses the M1 domain models as the request/response shape rather
+than forking a parallel schema. Did not implement the map/trajectory UI (M3) or SigMF ingest (M4).
+
+### M4 — SigMF catalogue (in progress)
+
+Branch `feature/sigmf-catalogue`. Ingests a SigMF `.sigmf-meta`/`.sigmf-data` asset pair already
+uploaded to MinIO object storage: parses SigMF core metadata (`backend/rogue/catalogue/sigmf.py`,
+pure/no I/O), streams the data object from S3 in bounded chunks to compute its checksum/length
+(`backend/rogue/storage/object_store.py`), validates pairing/checksum/duration/metadata
+(`backend/rogue/catalogue/ingest.py`, reusing `rogue.domain.validation.ValidationFinding`), and
+persists the result as an immutable, versioned `IQRecording` row
+(`backend/rogue/persistence/catalogue.py`) — mirroring M2's draft/validate/publish shape rather
+than forking a parallel persistence pattern. Exposes `POST /recordings` (ingest; `recording_id`
+omitted registers a new catalogue entry, given adds a new version to it),
+`GET /recordings` (latest version per entry, filterable), `GET /recordings/{id}`,
+`GET /recordings/{id}/versions[/{version}]`. Reuses M1's `IQRecording` domain model as-is (no new
+fields added to it) and M2's `NotFoundError`/`ValidationRejectedError` so the existing exception
+handlers apply unchanged. Unknown/unmapped SigMF metadata (remaining `global` keys, `captures`,
+`annotations`, `collection`) is preserved verbatim in `extra_sigmf_fields` rather than dropped.
+Does not implement recording deprecation/retirement (domain-model.md's "referenced records are
+deprecated rather than destructively deleted" — no delete endpoint exists, so this is not yet a
+concern) or a presigned-upload flow for getting bytes into MinIO in the first place; both are
+left for a follow-up. RF/spectrum planning (M5) and Replay Plan compilation (M6) are out of scope.
 
 ## 4. Git workflow
 

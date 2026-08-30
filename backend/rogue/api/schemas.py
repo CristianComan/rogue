@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from rogue.domain.common import GeoPolygon
 from rogue.domain.mission import DroneMission
 from rogue.domain.receiver import Receiver
-from rogue.domain.recording import RecordingReference
+from rogue.domain.recording import AccessClassification, RecordingReference
 from rogue.domain.scenario import Zone
 from rogue.domain.timeline import TimelineEvent
 
@@ -66,3 +66,22 @@ class CloneResponse(BaseModel):
 
     scenario_id: UUID
     draft_id: UUID
+
+
+class RecordingIngestRequest(BaseModel):
+    """Register a SigMF asset pair already uploaded to object storage.
+
+    ``recording_id`` omitted registers a new catalogue entry; given, it adds
+    a new version to that existing entry.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    recording_id: UUID | None = None
+    metadata_object_key: str
+    data_object_key: str
+    provenance: str | None = None
+    access_classification: AccessClassification = AccessClassification.RESTRICTED
+    allowed_use_constraints: list[str] = Field(default_factory=list)
+    allowed_frequency_min_hz: float | None = None
+    allowed_frequency_max_hz: float | None = None
