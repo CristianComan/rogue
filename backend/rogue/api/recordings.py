@@ -8,24 +8,30 @@ this module only translates HTTP <-> domain calls, matching
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from rogue.api.idempotency import replay_or_execute
-from rogue.api.schemas import RecordingIngestRequest
+from rogue.api.schemas import RecordingIngestRequest, SpectrogramResponse
+from rogue.catalogue.sigmf import bytes_per_sample
+from rogue.catalogue.spectrogram import compute_spectrogram, decode_iq_samples
 from rogue.db.session import get_session
 from rogue.domain.recording import AccessClassification, IQRecording
 from rogue.persistence import catalogue
 from rogue.persistence.repository import NotFoundError
+from rogue.storage import object_store
 
 router = APIRouter(prefix="/recordings", tags=["recordings"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 IdempotencyKeyHeader = Annotated[str | None, Header(alias="Idempotency-Key")]
+
+_MAX_SPECTROGRAM_WINDOW_S = 10.0
 
 
 @router.post("", status_code=201)
@@ -83,6 +89,61 @@ async def get_recording(recording_id: UUID, session: SessionDep) -> IQRecording:
     if recording is None:
         raise NotFoundError(f"recording {recording_id} does not exist")
     return recording
+
+
+@router.get("/{recording_id}/spectrogram", response_model=SpectrogramResponse)
+async def get_recording_spectrogram(
+    recording_id: UUID,
+    session: SessionDep,
+    window_start_s: Annotated[float, Query(ge=0)] = 0.0,
+    window_duration_s: Annotated[float, Query(gt=0, le=_MAX_SPECTROGRAM_WINDOW_S)] = 1.0,
+    fft_size: Annotated[int, Query(ge=64, le=8192)] = 1024,
+) -> SpectrogramResponse:
+    """A bounded time/frequency dB preview of the recording's I/Q content.
+
+    Computed from a range-read of just the requested window's bytes — never
+    the full recording (CLAUDE.md rule 8) — so ``window_duration_s`` is
+    capped at ``_MAX_SPECTROGRAM_WINDOW_S`` regardless of the recording's
+    actual length.
+    """
+    recording = await catalogue.get_recording(session, recording_id)
+    if recording is None:
+        raise NotFoundError(f"recording {recording_id} does not exist")
+
+    sample_size = bytes_per_sample(recording.sample_format)
+    if sample_size is None:
+        raise HTTPException(
+            422,
+            detail=f"unsupported sample_format {recording.sample_format!r} for spectrogram",
+        )
+
+    total_bytes = recording.sample_count * sample_size
+    offset_bytes = int(window_start_s * recording.sample_rate_hz) * sample_size
+    if offset_bytes >= total_bytes:
+        raise HTTPException(
+            422,
+            detail=(
+                f"window_start_s={window_start_s} is at or beyond the recording's "
+                f"duration_s={recording.duration_s}"
+            ),
+        )
+    requested_bytes = int(window_duration_s * recording.sample_rate_hz) * sample_size
+    length_bytes = min(requested_bytes, total_bytes - offset_bytes)
+
+    try:
+        raw = await asyncio.to_thread(
+            object_store.get_object_range, recording.data_object_key, offset_bytes, length_bytes
+        )
+    except object_store.ObjectNotFoundError as exc:
+        raise NotFoundError(f"recording data object is missing from storage: {exc}") from exc
+
+    samples = decode_iq_samples(raw, recording.sample_format)
+    result = compute_spectrogram(samples, recording.sample_rate_hz, fft_size=fft_size)
+    return SpectrogramResponse(
+        time_offsets_s=result.time_offsets_s,
+        freq_offsets_hz=result.freq_offsets_hz,
+        magnitude_db=result.magnitude_db,
+    )
 
 
 @router.get("/{recording_id}/versions", response_model=list[IQRecording])

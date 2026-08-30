@@ -6,6 +6,7 @@ import type {
   RfEmission,
   RfLinkRole,
   ScriptedFrequencyChange,
+  TimingSyncClass,
 } from "../../domain/types";
 import { NumberField, SelectField, TextField } from "./fields";
 import { RecordingPicker } from "./RecordingPicker";
@@ -18,6 +19,16 @@ const MODES: readonly FrequencySwitchingMode[] = [
   "external_state_triggered",
 ];
 const TRANSITION_TYPES: readonly FrequencyTransitionType[] = ["channel_switch", "band_switch"];
+// "none" is a UI-only sentinel for required_sync_class's null case — never
+// sent to the backend as a literal TimingSyncClass value.
+const SYNC_CLASS_OPTIONS: readonly (TimingSyncClass | "none")[] = [
+  "none",
+  "l0_simulated",
+  "l1_software_barrier",
+  "l2_scheduled_local",
+  "l3_shared_reference",
+  "l4_measured",
+];
 
 export interface RfLinkFormProps {
   link: DroneRfLink;
@@ -94,6 +105,29 @@ export function RfLinkForm({ link, onChange, onDelete, catalogue, platformName }
 
   function removeEmission(index: number) {
     onChange({ ...link, emissions: link.emissions.filter((_, i) => i !== index) });
+  }
+
+  function toggleSilence(index: number, silent: boolean) {
+    const emission = link.emissions[index];
+    if (silent) {
+      // A silence span has no recording to derive a length from — the
+      // backend requires duration_override whenever recording is null.
+      updateEmission(index, {
+        recording: null,
+        duration_override: emission.duration_override ?? "PT1S",
+      });
+    } else {
+      updateEmission(index, { recording: { recording_id: "", version: 1, note: null } });
+    }
+  }
+
+  function setResourcePreference(enabled: boolean) {
+    onChange({
+      ...link,
+      resource_preference: enabled
+        ? { preferred_agent_tags: [], required_sync_class: null, notes: null }
+        : null,
+    });
   }
 
   return (
@@ -175,66 +209,147 @@ export function RfLinkForm({ link, onChange, onDelete, catalogue, platformName }
         <legend>Emissions</legend>
         <p style={{ fontSize: 11, color: "#4c5c5e", margin: "0 0 8px" }}>
           Start offset + duration place a recording within this mission's trajectory — an empty
-          duration plays the full recording.
+          duration plays the full recording. Mark a span "Silence" to author the link as
+          deliberately off-air for that span (a duration is then required, since there's no
+          recording to derive a length from). Background-kind recordings are labeled "· background"
+          in the picker.
         </p>
-        {link.emissions.map((emission, i) => (
-          <div
-            key={emission.id}
-            data-testid={`emission-${i}`}
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 8,
-              marginBottom: 6,
-              alignItems: "flex-end",
-            }}
-          >
-            <RecordingPicker
-              recordings={catalogue}
-              value={emission.recording.recording_id}
-              preferredPlatform={platformName}
-              onChange={(recording_id) =>
-                updateEmission(i, { recording: { ...emission.recording, recording_id } })
-              }
-            />
-            <NumberField
-              label="Version"
-              value={emission.recording.version}
-              onChange={(version) =>
-                updateEmission(i, { recording: { ...emission.recording, version } })
-              }
-            />
-            <TextField
-              label="Start offset"
-              value={emission.start_offset}
-              onChange={(start_offset) => updateEmission(i, { start_offset })}
-            />
-            <TextField
-              label="Duration override"
-              value={emission.duration_override ?? ""}
-              onChange={(v) => updateEmission(i, { duration_override: v || null })}
-            />
-            <NumberField
-              label="Gain (dB)"
-              value={emission.gain_offset_db}
-              onChange={(gain_offset_db) => updateEmission(i, { gain_offset_db })}
-            />
-            <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
-              <input
-                type="checkbox"
-                checked={emission.loop}
-                onChange={(e) => updateEmission(i, { loop: e.target.checked })}
+        {link.emissions.map((emission, i) => {
+          const isSilent = emission.recording === null;
+          return (
+            <div
+              key={emission.id}
+              data-testid={`emission-${i}`}
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 8,
+                marginBottom: 6,
+                alignItems: "flex-end",
+              }}
+            >
+              <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={isSilent}
+                  onChange={(e) => toggleSilence(i, e.target.checked)}
+                />
+                Silence
+              </label>
+              {!isSilent && emission.recording && (
+                <>
+                  <RecordingPicker
+                    recordings={catalogue}
+                    value={emission.recording.recording_id}
+                    preferredPlatform={platformName}
+                    onChange={(recording_id) =>
+                      updateEmission(i, {
+                        recording: { ...emission.recording!, recording_id },
+                      })
+                    }
+                  />
+                  <NumberField
+                    label="Version"
+                    value={emission.recording.version}
+                    onChange={(version) =>
+                      updateEmission(i, { recording: { ...emission.recording!, version } })
+                    }
+                  />
+                </>
+              )}
+              <TextField
+                label="Start offset"
+                value={emission.start_offset}
+                onChange={(start_offset) => updateEmission(i, { start_offset })}
               />
-              Loop
-            </label>
-            <button type="button" onClick={() => removeEmission(i)}>
-              Remove
-            </button>
-          </div>
-        ))}
+              <TextField
+                label={isSilent ? "Duration (required)" : "Duration override"}
+                value={emission.duration_override ?? ""}
+                onChange={(v) => updateEmission(i, { duration_override: v || null })}
+              />
+              <NumberField
+                label="Gain (dB)"
+                value={emission.gain_offset_db}
+                onChange={(gain_offset_db) => updateEmission(i, { gain_offset_db })}
+              />
+              <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={emission.loop}
+                  onChange={(e) => updateEmission(i, { loop: e.target.checked })}
+                />
+                Loop
+              </label>
+              <button type="button" onClick={() => removeEmission(i)}>
+                Remove
+              </button>
+            </div>
+          );
+        })}
         <button type="button" onClick={addEmission} style={{ alignSelf: "flex-start" }}>
           + Emission
         </button>
+      </fieldset>
+
+      <fieldset style={{ border: "1px solid #ccc" }}>
+        <legend>Resource preference (non-binding)</legend>
+        <p style={{ fontSize: 11, color: "#4c5c5e", margin: "0 0 8px" }}>
+          A preference only — never a device binding (CLAUDE.md rule 1). Actual SDR/channel
+          assignment happens at run preparation and is recorded in the immutable run manifest, not
+          here.
+        </p>
+        <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
+          <input
+            type="checkbox"
+            checked={link.resource_preference !== null}
+            onChange={(e) => setResourcePreference(e.target.checked)}
+          />
+          Set a resource preference for this link
+        </label>
+        {link.resource_preference && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+            <TextField
+              label="Preferred agent tags (comma separated)"
+              value={link.resource_preference.preferred_agent_tags.join(", ")}
+              onChange={(v) =>
+                onChange({
+                  ...link,
+                  resource_preference: {
+                    ...link.resource_preference!,
+                    preferred_agent_tags: v
+                      .split(",")
+                      .map((tag) => tag.trim())
+                      .filter(Boolean),
+                  },
+                })
+              }
+            />
+            <SelectField
+              label="Required sync class"
+              value={link.resource_preference.required_sync_class ?? "none"}
+              options={SYNC_CLASS_OPTIONS}
+              onChange={(v) =>
+                onChange({
+                  ...link,
+                  resource_preference: {
+                    ...link.resource_preference!,
+                    required_sync_class: v === "none" ? null : v,
+                  },
+                })
+              }
+            />
+            <TextField
+              label="Notes"
+              value={link.resource_preference.notes ?? ""}
+              onChange={(v) =>
+                onChange({
+                  ...link,
+                  resource_preference: { ...link.resource_preference!, notes: v || null },
+                })
+              }
+            />
+          </div>
+        )}
       </fieldset>
     </div>
   );

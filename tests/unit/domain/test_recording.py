@@ -6,6 +6,8 @@ import pytest
 from factories import make_iq_recording
 from pydantic import ValidationError
 
+from rogue.domain.recording import RecordingKind
+
 
 def test_make_iq_recording_reference_matches_source() -> None:
     recording = make_iq_recording()
@@ -28,3 +30,11 @@ def test_unknown_sigmf_extension_fields_are_retained() -> None:
 def test_version_must_be_positive() -> None:
     with pytest.raises(ValidationError):
         make_iq_recording(version=0)
+
+
+def test_kind_defaults_to_signal() -> None:
+    assert make_iq_recording().kind == RecordingKind.SIGNAL
+
+
+def test_kind_can_be_set_to_background() -> None:
+    assert make_iq_recording(kind=RecordingKind.BACKGROUND).kind == RecordingKind.BACKGROUND

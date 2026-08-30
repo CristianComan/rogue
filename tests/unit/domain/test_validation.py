@@ -5,8 +5,15 @@ from __future__ import annotations
 from datetime import timedelta
 from uuid import uuid4
 
-from factories import scenario_version_kwargs
+from factories import (
+    drone_mission_kwargs,
+    drone_rf_link_kwargs,
+    recording_reference,
+    scenario_version_kwargs,
+)
 
+from rogue.domain.mission import DroneMission
+from rogue.domain.rf import DroneRfLink, RfEmission
 from rogue.domain.scenario import ScenarioVersion
 from rogue.domain.timeline import MissionRelativeAnchor, MissionRelativeTimelineEvent
 from rogue.domain.validation import ValidationSeverity, validate_scenario_version
@@ -52,6 +59,64 @@ def test_dangling_waypoint_reference_is_blocking() -> None:
 
     codes = {f.code for f in findings if f.severity == ValidationSeverity.BLOCKING}
     assert "dangling_waypoint_reference" in codes
+
+
+def test_overlapping_emissions_is_blocking() -> None:
+    ref = recording_reference()
+    overlapping = [
+        RfEmission(
+            recording=ref, start_offset=timedelta(0), duration_override=timedelta(seconds=10)
+        ),
+        RfEmission(
+            recording=ref,
+            start_offset=timedelta(seconds=5),
+            duration_override=timedelta(seconds=10),
+        ),
+    ]
+    link = DroneRfLink(**drone_rf_link_kwargs(recording=ref, emissions=overlapping))
+    mission = DroneMission(**drone_mission_kwargs(recording=ref, rf_links=[link]))
+    version = ScenarioVersion(**scenario_version_kwargs(missions=[mission], recordings=[ref]))
+
+    findings = validate_scenario_version(version)
+
+    codes = {f.code for f in findings if f.severity == ValidationSeverity.BLOCKING}
+    assert "overlapping_emissions" in codes
+
+
+def test_sequential_non_overlapping_emissions_is_not_blocking() -> None:
+    ref = recording_reference()
+    sequential = [
+        RfEmission(
+            recording=ref, start_offset=timedelta(0), duration_override=timedelta(seconds=5)
+        ),
+        RfEmission(
+            recording=ref,
+            start_offset=timedelta(seconds=5),
+            duration_override=timedelta(seconds=5),
+        ),
+    ]
+    link = DroneRfLink(**drone_rf_link_kwargs(recording=ref, emissions=sequential))
+    mission = DroneMission(**drone_mission_kwargs(recording=ref, rf_links=[link]))
+    version = ScenarioVersion(**scenario_version_kwargs(missions=[mission], recordings=[ref]))
+
+    findings = validate_scenario_version(version)
+
+    codes = {f.code for f in findings if f.severity == ValidationSeverity.BLOCKING}
+    assert "overlapping_emissions" not in codes
+
+
+def test_silence_span_does_not_trigger_dangling_recording_reference() -> None:
+    ref = recording_reference()
+    silence = RfEmission(
+        recording=None, start_offset=timedelta(0), duration_override=timedelta(seconds=5)
+    )
+    link = DroneRfLink(**drone_rf_link_kwargs(recording=ref, emissions=[silence]))
+    mission = DroneMission(**drone_mission_kwargs(recording=ref, rf_links=[link]))
+    version = ScenarioVersion(**scenario_version_kwargs(missions=[mission], recordings=[ref]))
+
+    findings = validate_scenario_version(version)
+
+    assert all(f.severity != ValidationSeverity.BLOCKING for f in findings)
 
 
 def test_empty_scenario_produces_warning_not_blocking() -> None:

@@ -51,9 +51,14 @@ def _client() -> Any:
     )
 
 
-def _get_object(key: str) -> Any:
+def _get_object(key: str, *, byte_range: tuple[int, int] | None = None) -> Any:
+    kwargs: dict[str, Any] = {"Bucket": settings.s3_bucket, "Key": key}
+    if byte_range is not None:
+        offset, length = byte_range
+        # HTTP Range is an inclusive end byte, hence the -1.
+        kwargs["Range"] = f"bytes={offset}-{offset + length - 1}"
     try:
-        return _client().get_object(Bucket=settings.s3_bucket, Key=key)
+        return _client().get_object(**kwargs)
     except ClientError as exc:
         error_code = exc.response.get("Error", {}).get("Code")
         if error_code in ("NoSuchKey", "404"):
@@ -64,6 +69,19 @@ def _get_object(key: str) -> Any:
 def get_object_bytes(key: str) -> bytes:
     """Fetch a small object (e.g. ``.sigmf-meta``) fully into memory."""
     response = _get_object(key)
+    body: bytes = response["Body"].read()
+    return body
+
+
+def get_object_range(key: str, offset: int, length: int) -> bytes:
+    """Fetch exactly ``length`` bytes of ``key`` starting at ``offset``.
+
+    Uses an HTTP Range GET (MinIO/S3 both support it), so this stays bounded
+    regardless of the underlying object's size — the spectrogram endpoint
+    uses this to read only the requested time window's worth of I/Q samples,
+    never the full recording.
+    """
+    response = _get_object(key, byte_range=(offset, length))
     body: bytes = response["Body"].read()
     return body
 

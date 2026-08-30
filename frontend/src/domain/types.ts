@@ -130,6 +130,9 @@ export interface RecordingReference {
 // mirrors backend/rogue/domain/recording.py:AccessClassification
 export type AccessClassification = "public" | "restricted" | "controlled";
 
+// mirrors backend/rogue/domain/recording.py:RecordingKind
+export type RecordingKind = "signal" | "background";
+
 // mirrors backend/rogue/domain/recording.py:IQRecording — the M4 catalogue
 // entry shape returned by GET /recordings (src/api/recordings.ts). Not the
 // same thing as RecordingReference above, which is just an
@@ -146,6 +149,7 @@ export interface IQRecording {
   sample_count: number;
   duration_s: number;
   center_frequency_hz: number | null;
+  kind: RecordingKind;
   provenance: string | null;
   access_classification: AccessClassification;
   allowed_use_constraints: string[];
@@ -154,10 +158,12 @@ export interface IQRecording {
   extra_sigmf_fields: Record<string, unknown>;
 }
 
-// mirrors backend/rogue/domain/rf.py:RfEmission
+// mirrors backend/rogue/domain/rf.py:RfEmission — `recording: null` authors
+// an explicit silence span (the link is deliberately off-air), distinct
+// from simply not scheduling anything there.
 export interface RfEmission {
   id: string;
-  recording: RecordingReference;
+  recording: RecordingReference | null;
   start_offset: string; // ISO8601 duration
   duration_override: string | null;
   gain_offset_db: number;
@@ -196,6 +202,16 @@ export type TimingSyncClass =
   | "l2_scheduled_local"
   | "l3_shared_reference"
   | "l4_measured";
+
+// mirrors backend/rogue/api/schemas.py:SpectrogramResponse — GET
+// /recordings/{id}/spectrogram (src/api/recordings.ts). Frequency bins are
+// baseband-centered on the recording's own capture frequency, not any
+// scenario RfLink's live authored frequency; Waterfall.tsx re-centers.
+export interface SpectrogramResponse {
+  time_offsets_s: number[];
+  freq_offsets_hz: number[];
+  magnitude_db: number[][];
+}
 
 // mirrors backend/rogue/domain/rf.py:ResourcePreference
 export interface ResourcePreference {

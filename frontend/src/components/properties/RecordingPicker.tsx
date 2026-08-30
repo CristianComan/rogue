@@ -19,10 +19,11 @@ export interface RecordingPickerProps {
 
 function labelFor(recording: IQRecording): string {
   const shortId = recording.id.slice(0, 8);
+  const kindSuffix = recording.kind === "background" ? " · background" : "";
   const platform = recording.provenance?.match(/platform=([^,]+)/)?.[1]?.trim();
-  if (platform) return `${platform} (${shortId})`;
-  if (recording.provenance) return `${recording.provenance.slice(0, 40)} (${shortId})`;
-  return recording.id;
+  if (platform) return `${platform} (${shortId})${kindSuffix}`;
+  if (recording.provenance) return `${recording.provenance.slice(0, 40)} (${shortId})${kindSuffix}`;
+  return `${recording.id}${kindSuffix}`;
 }
 
 /**

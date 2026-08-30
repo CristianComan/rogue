@@ -93,3 +93,18 @@ class RecordingIngestRequest(BaseModel):
     allowed_use_constraints: list[str] = Field(default_factory=list)
     allowed_frequency_min_hz: float | None = None
     allowed_frequency_max_hz: float | None = None
+
+
+class SpectrogramResponse(BaseModel):
+    """A bounded time/frequency dB preview of a recording's I/Q content.
+
+    Frequency bins are baseband-centered (0 Hz = the recording's own
+    ``center_frequency_hz``, not any scenario RfLink's live authored
+    frequency) — the caller re-centers for display.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    time_offsets_s: list[float]
+    freq_offsets_hz: list[float]
+    magnitude_db: list[list[float]]

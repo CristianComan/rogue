@@ -8,4 +8,4 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 cd "$(dirname "$0")" || exit 1
 nvm use default >/dev/null
-exec npm run dev -- --host
+exec npm run dev -- --host "$@"

@@ -26,6 +26,18 @@ class AccessClassification(StrEnum):
     CONTROLLED = "controlled"
 
 
+class RecordingKind(StrEnum):
+    """Whether a recording is a signal of interest or an ambient/noise-floor capture.
+
+    Set at ingest, not re-decided per emission — an RfEmission that wants to
+    play "background only" for a span picks a RecordingKind.BACKGROUND
+    recording via the same RecordingReference mechanism as any other.
+    """
+
+    SIGNAL = "signal"
+    BACKGROUND = "background"
+
+
 class RecordingReference(RogueModel):
     """Lightweight pointer to a specific, versioned IQRecording."""
 
@@ -52,6 +64,7 @@ class IQRecording(IdentifiedMixin):
     sample_count: int = Field(ge=0)
     duration_s: float = Field(ge=0)
     center_frequency_hz: float | None = None
+    kind: RecordingKind = RecordingKind.SIGNAL
     provenance: str | None = None
     access_classification: AccessClassification = AccessClassification.RESTRICTED
     allowed_use_constraints: list[str] = Field(default_factory=list)

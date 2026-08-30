@@ -19,6 +19,7 @@ from rogue.domain.common import RogueModel
 from rogue.domain.timeline import MissionRelativeTimelineEvent
 
 if TYPE_CHECKING:
+    from rogue.domain.rf import RfEmission
     from rogue.domain.scenario import ScenarioVersion
 
 
@@ -38,6 +39,21 @@ class ValidationFinding(RogueModel):
     path: str
 
 
+def _resolvable_span_seconds(emission: RfEmission) -> tuple[float, float] | None:
+    """(start, end) seconds if resolvable purely from the emission's own fields.
+
+    An emission with no explicit ``duration_override`` that plays a
+    recording to its natural length isn't resolvable here without a
+    catalogue lookup this module doesn't have; a looping emission is
+    open-ended by design. Both are skipped rather than guessed at, so
+    overlap detection below is conservative/best-effort, not exhaustive.
+    """
+    if emission.loop or emission.duration_override is None:
+        return None
+    start = emission.start_offset.total_seconds()
+    return start, start + emission.duration_override.total_seconds()
+
+
 def validate_scenario_version(version: ScenarioVersion) -> list[ValidationFinding]:
     """Run cross-entity consistency checks over a ScenarioVersion.
 
@@ -51,8 +67,12 @@ def validate_scenario_version(version: ScenarioVersion) -> list[ValidationFindin
 
     for mission_index, mission in enumerate(version.missions):
         for link_index, link in enumerate(mission.rf_links):
+            resolved_spans: list[tuple[int, float, float]] = []
             for emission_index, emission in enumerate(link.emissions):
-                if emission.recording.recording_id not in known_recording_ids:
+                if (
+                    emission.recording is not None
+                    and emission.recording.recording_id not in known_recording_ids
+                ):
                     findings.append(
                         ValidationFinding(
                             severity=ValidationSeverity.BLOCKING,
@@ -65,6 +85,29 @@ def validate_scenario_version(version: ScenarioVersion) -> list[ValidationFindin
                             path=(
                                 f"missions[{mission_index}].rf_links[{link_index}]"
                                 f".emissions[{emission_index}].recording.recording_id"
+                            ),
+                        )
+                    )
+                span = _resolvable_span_seconds(emission)
+                if span is not None:
+                    resolved_spans.append((emission_index, span[0], span[1]))
+
+            resolved_spans.sort(key=lambda s: s[1])
+            for (prev_index, _prev_start, prev_end), (next_index, next_start, _next_end) in zip(
+                resolved_spans, resolved_spans[1:], strict=False
+            ):
+                if next_start < prev_end:
+                    findings.append(
+                        ValidationFinding(
+                            severity=ValidationSeverity.BLOCKING,
+                            code="overlapping_emissions",
+                            message=(
+                                f"RfEmissions {prev_index} and {next_index} on this RfLink "
+                                "overlap in time"
+                            ),
+                            path=(
+                                f"missions[{mission_index}].rf_links[{link_index}]"
+                                f".emissions[{next_index}]"
                             ),
                         )
                     )
