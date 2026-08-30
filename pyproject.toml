@@ -76,5 +76,5 @@ mypy_path = ["backend", "agents"]
 exclude = ["backend/rogue/db/migrations/versions"]
 
 [[tool.mypy.overrides]]
-module = ["boto3.*", "geoalchemy2.*", "nats.*"]
+module = ["boto3.*", "botocore.*", "geoalchemy2.*", "nats.*"]
 ignore_missing_imports = true
