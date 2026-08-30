@@ -21,7 +21,10 @@ Frequency resolution per ``FrequencySwitchingMode``:
   from ``band.allowed_channels_hz``. Requires a non-empty
   ``allowed_channels_hz`` — without an explicit channel plan there is
   nothing to switch between, so this mode is unresolved instead of
-  inventing one.
+  inventing one. The dwell-generation loop itself lives in the public
+  ``probabilistic_dwell_segments`` so ``rogue.compiler.frequency`` (M6) can
+  realize the same seeded sequence over a full compile horizon rather than
+  one instant at a time.
 - ``MISSION_TRIGGERED`` / ``EXTERNAL_STATE_TRIGGERED``: always unresolved.
   The backend has no mission-time-evaluation engine yet (that logic only
   exists on the frontend, ``frontend/src/domain/missionEvaluator.ts`` — see
@@ -57,6 +60,39 @@ def _resolve_scripted(link: DroneRfLink, at_seconds: float) -> FrequencyResoluti
     return FrequencyResolution(link_id=link.id, resolved=True, frequency_hz=current)
 
 
+def probabilistic_dwell_segments(
+    random_seed: int, mean_dwell_s: float, allowed_channels_hz: list[float], up_to_seconds: float
+) -> list[tuple[float, float, float]]:
+    """(start, end, frequency_hz) dwell segments covering at least [0, up_to_seconds].
+
+    Extracted from ``_resolve_probabilistic`` so there is one seeded-RNG
+    implementation of PROBABILISTIC_ADAPTIVE dwell semantics, reused by
+    ``_resolve_probabilistic`` itself (single-instant query — takes the last
+    segment) and by ``rogue.compiler.frequency`` (M6, full-horizon
+    realization). The final segment's end may exceed ``up_to_seconds`` by up
+    to one dwell (the natural stopping point isn't known in advance);
+    callers needing a hard-clipped horizon truncate it themselves.
+    """
+    rng = random.Random(random_seed)
+    segments: list[tuple[float, float, float]] = []
+    t = 0.0
+    current = rng.choice(allowed_channels_hz)
+    while True:
+        # Exponential inter-event time via inverse-CDF sampling from rng's
+        # own uniform stream (rather than rng.expovariate) so the sequence
+        # only ever depends on (seed, mean_dwell_s), not on stdlib internals
+        # calling the uniform stream a different number of times per draw.
+        u = rng.random()
+        dwell = -mean_dwell_s * log(1.0 - u)
+        next_t = t + dwell
+        segments.append((t, next_t, current))
+        if next_t > up_to_seconds:
+            break
+        t = next_t
+        current = rng.choice(allowed_channels_hz)
+    return segments
+
+
 def _resolve_probabilistic(link: DroneRfLink, at_seconds: float) -> FrequencyResolution:
     behaviour = link.frequency_behaviour
     channels = link.band.allowed_channels_hz
@@ -76,22 +112,10 @@ def _resolve_probabilistic(link: DroneRfLink, at_seconds: float) -> FrequencyRes
             unresolved_reason="PROBABILISTIC_ADAPTIVE requires a positive mean_dwell_s",
         )
 
-    rng = random.Random(behaviour.random_seed)
-    t = 0.0
-    current = rng.choice(channels)
-    while True:
-        # Exponential inter-event time via inverse-CDF sampling from rng's
-        # own uniform stream (rather than rng.expovariate) so the sequence
-        # only ever depends on (seed, mean_dwell_s), not on stdlib internals
-        # calling the uniform stream a different number of times per draw.
-        u = rng.random()
-        dwell = -mean_dwell_s * log(1.0 - u)
-        next_t = t + dwell
-        if next_t > at_seconds:
-            break
-        t = next_t
-        current = rng.choice(channels)
-    return FrequencyResolution(link_id=link.id, resolved=True, frequency_hz=current)
+    segments = probabilistic_dwell_segments(
+        behaviour.random_seed, mean_dwell_s, channels, at_seconds
+    )
+    return FrequencyResolution(link_id=link.id, resolved=True, frequency_hz=segments[-1][2])
 
 
 def resolve_frequency_hz(link: DroneRfLink, at_seconds: float) -> FrequencyResolution:

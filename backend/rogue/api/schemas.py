@@ -13,6 +13,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from rogue.compiler.models import HardwareCapabilityProfile
 from rogue.domain.common import GeoPolygon
 from rogue.domain.mission import DroneMission
 from rogue.domain.receiver import Receiver
@@ -79,6 +80,21 @@ class SpectrumStateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     at_seconds: float = Field(ge=0)
+
+
+class CompileRequest(BaseModel):
+    """Compile-time inputs for the RF Environment Compiler (M6).
+
+    ``capability_profile`` omitted uses ``rogue.compiler.models.
+    DEFAULT_CAPABILITY_PROFILE`` (the illustrative 24-channel initial
+    planning profile from CLAUDE.md section 4) rather than runtime-
+    discovered hardware — that's M8/M10, per CLAUDE.md rule 10.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    duration_s: float = Field(gt=0)
+    capability_profile: HardwareCapabilityProfile | None = None
 
 
 class RecordingIngestRequest(BaseModel):
