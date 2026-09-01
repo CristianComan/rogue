@@ -14,9 +14,9 @@ Build ROGUE in bounded, testable increments. Do not begin with hardware-specific
 | M3 | Map + trajectory editor | multi-drone scenario visual playback | Done — `feature/map-trajectory-editor`, merged to `develop` |
 | M4 | SigMF catalogue | validated immutable recording assets | Done — `feature/sigmf-catalogue`, merged to `develop` |
 | M5 | RF spectrum planner | deterministic spectrum state and conflict/headroom findings | Done — `feature/rf-spectrum-planner`, merged to `develop` |
-| — | Recording schedule + spectrum waterfall | per-platform recording/background/silence scheduling, real spectrogram preview | In progress — `feature/recording-schedule-waterfall` (supplemental; not in the original CLAUDE.md M-sequence, added by direct request) |
-| M6 | Replay Plan compiler | scenario compiles to hardware-neutral executable plan | Done — `feature/replay-plan-compile`, not yet merged |
-| M7 | Simulated SDR execution | full prepare/arm/start/stop without hardware | Planned |
+| — | Recording schedule + spectrum waterfall | per-platform recording/background/silence scheduling, real spectrogram preview | Done — `feature/recording-schedule-waterfall`, merged to `develop` (supplemental; not in the original CLAUDE.md M-sequence, added by direct request) |
+| M6 | Replay Plan compiler | scenario compiles to hardware-neutral executable plan | Done — `feature/replay-plan-compile`, merged to `develop` |
+| M7 | Simulated SDR execution | full prepare/arm/start/stop without hardware | Done — `feature/simulate-sdr-execution` |
 | M8 | Distributed SDR Agent | leases, cache, protocol, watchdog, telemetry | Planned |
 | M9 | First real adapter | cabled/attenuated replay on one supported device | Planned |
 | M10 | X440 + AIR7311 capability-based scheduling | both hardware families behind common interface | Planned |
@@ -186,6 +186,48 @@ scenario have an explicit total duration" concept still doesn't exist
 (mission timing is M3's unfinished job) — the compile endpoint takes an
 explicit `duration_s` horizon instead, the same shape as M5's `at_seconds`
 single-instant query, generalized to a span.
+
+### M7 — Simulated SDR execution (done)
+
+Branch `feature/simulate-sdr-execution`, based on `develop` after M6. New
+domain model `backend/rogue/domain/run.py` (`ScenarioRun`, `RunStatus`,
+`DeviceLease`, `RunEvent`/`RunEventKind`) and a new `backend/rogue/
+execution/` package: `adapter.py` defines the vendor-neutral `SDRAdapter`
+Protocol (sdr-architecture.md section 2) plus `MockSDRAdapter`, a
+first-class simulated implementation with per-channel state, a small
+simulated transfer delay, and an injectable `fail_on` hook so tests can
+force a specific `(device_id, channel_index, method)` call to raise
+`SimulatedDeviceFailureError`; `orchestrator.py` is the pure, DB-free
+prepare/arm/start/stop/emergency-stop state machine (mirrors `compiler/
+compile.py` vs `persistence/replay.py`'s split). See ADR-007 for the exact
+scope decisions and their rationale — in-process only (no NATS, no
+separate Agent process; that's M8), one earliest-allocation configuration
+per physical channel, real prefetch/hash-verification against the
+catalogue, and emergency-stop as an always-reachable, always-succeeding
+path from any `RunStatus` including `failed`.
+
+Persisted like M2's `ScenarioDraftORM` (mutable JSONB document, not M6's
+insert-only pattern): a new `scenario_runs` table (migration
+`1e17dd5b4902`), `rogue.persistence.run` doing read-current-document →
+call the matching pure `orchestrator` function → write the updated
+document back, against a single process-wide `MockSDRAdapter` instance.
+API: `POST /scenarios/{id}/replay-plans/{plan_id}/runs` (create+prepare,
+idempotency-key-wrapped, 201), `POST .../runs/{run_id}/{arm,start,stop}`
+(also idempotency-key-wrapped, 200), `POST .../runs/{run_id}/emergency-stop`
+(no idempotency key — always accepted, never blocked), `GET .../runs/
+{run_id}`, `GET .../runs`. `InvalidRunTransitionError` (wrong-status
+lifecycle call) maps to HTTP 409.
+
+Backend test suite grew from 207 to 254 tests: `tests/unit/domain/
+test_run.py`, `tests/unit/execution/{test_adapter,test_orchestrator}.py`
+(pure, including dedicated emergency-stop-from-armed/running/failed tests
+per CLAUDE.md section 10), `tests/unit/persistence/test_run_execution.py`
+(named to avoid a pytest module-name collision with the domain test file,
+matching M6's `test_replay_compiler.py` precedent), and `tests/unit/api/
+test_runs.py`. Manually verified end-to-end against a live server: compile
+a plan, walk create→arm→start→stop via curl with `GET .../runs/{id}`
+confirming a strictly growing event list at each step, and a separate
+emergency-stop mid-`running` reaching `emergency_stopped`.
 
 ## 4. Git workflow
 

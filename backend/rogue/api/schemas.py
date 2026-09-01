@@ -97,6 +97,14 @@ class CompileRequest(BaseModel):
     capability_profile: HardwareCapabilityProfile | None = None
 
 
+class RunCreateRequest(BaseModel):
+    """Who is executing a compiled ReplayPlan (M7)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    operator: str
+
+
 class RecordingIngestRequest(BaseModel):
     """Register a SigMF asset pair already uploaded to object storage.
 
