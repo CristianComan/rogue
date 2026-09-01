@@ -28,7 +28,25 @@ source .venv/bin/activate
 ```
 
 M2/M3/M4/M5/M6 need Postgres and MinIO (S3-compatible storage) running locally.
-M0/M1 don't need anything beyond the venv. Check whether the services are up:
+M0/M1 don't need anything beyond the venv.
+
+### Starting the docker containers
+
+`docker-compose.yml` defines the whole stack:
+
+| Service | What it's for | Needed for this guide? |
+|---|---|---|
+| `postgres` | PostgreSQL/PostGIS — every persisted scenario/draft/version/recording/replay plan | Yes (M2+) |
+| `minio` | S3-compatible object storage — SigMF recording bytes | Yes (M4+) |
+| `minio-init` | One-shot job that creates the `rogue` bucket in MinIO, then exits | Yes (M4+, runs once) |
+| `nats` | JetStream message broker — SDR Agent command/telemetry protocol | Not yet — no section below talks to it |
+| `api` | The FastAPI backend, containerized | No — this guide runs it directly with `uvicorn --reload` instead for a faster edit/reload loop; use this if you'd rather not set up a local Python env |
+| `ui` | The Vite frontend, containerized | No — this guide runs `frontend/dev.sh` directly instead, same reason |
+| `tiles` | Self-hosted MapLibre basemap tiles | Optional, M3 only — see that section |
+| `simulated-agent` | Placeholder simulated SDR Agent | Not yet exercised by any section below |
+
+For everything in this guide you only need `postgres`, `minio` and
+`minio-init` running. Check whether they already are:
 
 ```bash
 docker ps --filter "name=rogue-postgres" --filter "name=rogue-minio"
@@ -37,13 +55,75 @@ docker ps --filter "name=rogue-postgres" --filter "name=rogue-minio"
 If that prints nothing, start them:
 
 ```bash
-docker-compose up -d postgres minio minio-init
+docker compose up -d postgres minio minio-init
 ```
 
-(If `docker-compose up` errors with `KeyError: 'ContainerConfig'`, the
+(If `docker compose up` errors with `KeyError: 'ContainerConfig'`, the
 containers exist but are stale — find them with `docker ps -a --filter
 name=rogue` and start them by container ID instead, e.g. `docker start
 <postgres_id> <minio_id>`.)
+
+Confirm they're actually healthy, not just started:
+
+```bash
+docker compose ps
+```
+
+`postgres` and `minio` should show `Up`/`healthy`. `minio-init` should show
+`Exited (0)` — it's a one-shot job, not a long-running service, so "exited
+successfully" is what a healthy run looks like for it, not a failure.
+
+Two things you won't need for anything in this guide, but worth knowing
+about: bringing up the *entire* stack, including the containerized API/UI
+(e.g. to test the `docker compose build` path itself, not just local dev
+servers):
+
+```bash
+docker compose up -d
+```
+
+and tearing everything down:
+
+```bash
+docker compose down
+```
+
+Add `-v` to that last one only if you want a clean slate — it also deletes
+the Postgres/MinIO/NATS data volumes, i.e. every scenario/recording/replay
+plan you've registered.
+
+### Full containerized stack: two things that will trip you up
+
+**Running local `uvicorn`/`frontend/dev.sh` *and* the full stack at the same
+time.** `api` and `ui` bind the same host ports (`8000`/`5173`) their local
+dev-server equivalents use. If you `docker compose up -d` (the full stack)
+and then also try `uvicorn rogue.main:app --reload --app-dir backend`,
+you'll get `ERROR: [Errno 98] Address already in use` — that's the `api`
+container already holding port 8000, not a bug. Pick one:
+
+```bash
+docker compose stop api  # frees 8000 for local uvicorn; postgres/minio/etc. keep running
+```
+```bash
+docker compose up -d api  # or the reverse: give the port back to the container
+```
+
+**A stale local image after a Node or settings change.** The `ui` image is
+pinned to `frontend/Dockerfile`'s `FROM node:24-slim` — a maplibre-gl
+tooling dependency (`@mapbox/jsonlint-lines-primitives`) requires Node >=22,
+and `.npmrc`'s `engine-strict=true` makes `npm ci` hard-fail rather than
+warn on a mismatch, so if you ever see `EBADENGINE`/`Not compatible with
+your version of node` while building `ui`, that image predates the Node 24
+bump — `docker compose build ui` picks up the current Dockerfile. Similarly,
+if `api` crashes on startup with `pydantic_settings.exceptions.SettingsError`
+mentioning `cors_allowed_origins`, that image predates
+`backend/rogue/settings.py`'s `NoDecode` fix for comma-separated
+`ROGUE_CORS_ALLOWED_ORIGINS` values — `docker compose build api` picks up
+the fix. Check what actually crashed with:
+
+```bash
+docker compose logs api --tail 40
+```
 
 Then make sure the database schema is current:
 
@@ -200,7 +280,7 @@ only happens once) and builds `map-tiles/berlin.mbtiles`, scoped to the area
 the example/test scenarios already use. Then:
 
 ```bash
-docker-compose up -d tiles
+docker compose up -d tiles
 ```
 
 `frontend/.env.development` already points a plain `npm run dev` at
