@@ -141,6 +141,30 @@ class ReplayPlanORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ScenarioRunORM(Base):
+    """A ReplayPlan execution attempt (M7) — see ``rogue.domain.run.ScenarioRun``.
+
+    Mutable, like ``ScenarioDraftORM``: the orchestrator advances ``status``
+    and appends to ``document["events"]`` as a run progresses through
+    prepare/arm/start/stop. "Append-only" is enforced by convention in
+    ``rogue.persistence.run``/``rogue.execution.orchestrator``, not a
+    database constraint, in this feature.
+    """
+
+    __tablename__ = "scenario_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    scenario_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("scenarios.id"), nullable=False
+    )
+    replay_plan_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("replay_plans.id"), nullable=False
+    )
+    document: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class IdempotencyKeyORM(Base):
     """Cached response for a replayed mutating request, keyed per endpoint."""
 

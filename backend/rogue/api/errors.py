@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from rogue.execution.orchestrator import InvalidRunTransitionError
 from rogue.persistence import repository
 
 
@@ -45,3 +46,9 @@ def register_exception_handlers(app: FastAPI) -> None:
                 "findings": [f.model_dump(mode="json") for f in exc.findings],
             },
         )
+
+    @app.exception_handler(InvalidRunTransitionError)
+    async def _invalid_run_transition(
+        request: Request, exc: InvalidRunTransitionError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})

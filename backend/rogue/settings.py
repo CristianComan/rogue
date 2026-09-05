@@ -6,7 +6,10 @@ which sets the ROGUE_* variables consumed here).
 
 from __future__ import annotations
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Annotated
+
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -22,7 +25,19 @@ class Settings(BaseSettings):
     s3_secret_key: str = "rogue_dev_password"
     # M3's Vite dev server origin. Comma-separated for other environments,
     # e.g. ROGUE_CORS_ALLOWED_ORIGINS="http://localhost:5173,https://lab.example".
-    cors_allowed_origins: list[str] = ["http://localhost:5173"]
+    # NoDecode: pydantic-settings otherwise tries to JSON-decode a list[str]
+    # env var *before* any field validator runs, which fails outright on the
+    # plain comma-separated string this field's own docstring documents (and
+    # docker-compose.yml's api service actually sets) — this crashed api on
+    # every `docker compose up` until caught here.
+    cors_allowed_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173"]
+
+    @field_validator("cors_allowed_origins", mode="before")
+    @classmethod
+    def _split_comma_separated(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
 
 
 settings = Settings()

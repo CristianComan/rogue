@@ -1,4 +1,4 @@
-# Checking ROGUE yourself — manual verification guide (M0–M6)
+# Checking ROGUE yourself — manual verification guide (M0–M7)
 
 A hands-on walkthrough for verifying what's been built so far, milestone by
 milestone, without having to read the code. Everything is copy/paste — run
@@ -15,6 +15,7 @@ each block in a terminal from the repo root
 | M5 | RF spectrum planner | `curl` against a running server |
 | — | Recording schedule + spectrum waterfall (supplemental) | `curl` + a browser UI |
 | M6 | Replay Plan compiler | `curl` against a running server |
+| M7 | Simulated SDR execution | `curl` against a running server |
 | — | Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`) | run the script, then `curl`/`psql` |
 
 Each section is independent — jump to whichever milestone you want to check.
@@ -28,7 +29,25 @@ source .venv/bin/activate
 ```
 
 M2/M3/M4/M5/M6 need Postgres and MinIO (S3-compatible storage) running locally.
-M0/M1 don't need anything beyond the venv. Check whether the services are up:
+M0/M1 don't need anything beyond the venv.
+
+### Starting the docker containers
+
+`docker-compose.yml` defines the whole stack:
+
+| Service | What it's for | Needed for this guide? |
+|---|---|---|
+| `postgres` | PostgreSQL/PostGIS — every persisted scenario/draft/version/recording/replay plan | Yes (M2+) |
+| `minio` | S3-compatible object storage — SigMF recording bytes | Yes (M4+) |
+| `minio-init` | One-shot job that creates the `rogue` bucket in MinIO, then exits | Yes (M4+, runs once) |
+| `nats` | JetStream message broker — SDR Agent command/telemetry protocol | Not yet — no section below talks to it |
+| `api` | The FastAPI backend, containerized | No — this guide runs it directly with `uvicorn --reload` instead for a faster edit/reload loop; use this if you'd rather not set up a local Python env |
+| `ui` | The Vite frontend, containerized | No — this guide runs `frontend/dev.sh` directly instead, same reason |
+| `tiles` | Self-hosted MapLibre basemap tiles | Optional, M3 only — see that section |
+| `simulated-agent` | Placeholder simulated SDR Agent | Not yet exercised by any section below |
+
+For everything in this guide you only need `postgres`, `minio` and
+`minio-init` running. Check whether they already are:
 
 ```bash
 docker ps --filter "name=rogue-postgres" --filter "name=rogue-minio"
@@ -37,13 +56,75 @@ docker ps --filter "name=rogue-postgres" --filter "name=rogue-minio"
 If that prints nothing, start them:
 
 ```bash
-docker-compose up -d postgres minio minio-init
+docker compose up -d postgres minio minio-init
 ```
 
-(If `docker-compose up` errors with `KeyError: 'ContainerConfig'`, the
+(If `docker compose up` errors with `KeyError: 'ContainerConfig'`, the
 containers exist but are stale — find them with `docker ps -a --filter
 name=rogue` and start them by container ID instead, e.g. `docker start
 <postgres_id> <minio_id>`.)
+
+Confirm they're actually healthy, not just started:
+
+```bash
+docker compose ps
+```
+
+`postgres` and `minio` should show `Up`/`healthy`. `minio-init` should show
+`Exited (0)` — it's a one-shot job, not a long-running service, so "exited
+successfully" is what a healthy run looks like for it, not a failure.
+
+Two things you won't need for anything in this guide, but worth knowing
+about: bringing up the *entire* stack, including the containerized API/UI
+(e.g. to test the `docker compose build` path itself, not just local dev
+servers):
+
+```bash
+docker compose up -d
+```
+
+and tearing everything down:
+
+```bash
+docker compose down
+```
+
+Add `-v` to that last one only if you want a clean slate — it also deletes
+the Postgres/MinIO/NATS data volumes, i.e. every scenario/recording/replay
+plan you've registered.
+
+### Full containerized stack: two things that will trip you up
+
+**Running local `uvicorn`/`frontend/dev.sh` *and* the full stack at the same
+time.** `api` and `ui` bind the same host ports (`8000`/`5173`) their local
+dev-server equivalents use. If you `docker compose up -d` (the full stack)
+and then also try `uvicorn rogue.main:app --reload --app-dir backend`,
+you'll get `ERROR: [Errno 98] Address already in use` — that's the `api`
+container already holding port 8000, not a bug. Pick one:
+
+```bash
+docker compose stop api  # frees 8000 for local uvicorn; postgres/minio/etc. keep running
+```
+```bash
+docker compose up -d api  # or the reverse: give the port back to the container
+```
+
+**A stale local image after a Node or settings change.** The `ui` image is
+pinned to `frontend/Dockerfile`'s `FROM node:24-slim` — a maplibre-gl
+tooling dependency (`@mapbox/jsonlint-lines-primitives`) requires Node >=22,
+and `.npmrc`'s `engine-strict=true` makes `npm ci` hard-fail rather than
+warn on a mismatch, so if you ever see `EBADENGINE`/`Not compatible with
+your version of node` while building `ui`, that image predates the Node 24
+bump — `docker compose build ui` picks up the current Dockerfile. Similarly,
+if `api` crashes on startup with `pydantic_settings.exceptions.SettingsError`
+mentioning `cors_allowed_origins`, that image predates
+`backend/rogue/settings.py`'s `NoDecode` fix for comma-separated
+`ROGUE_CORS_ALLOWED_ORIGINS` values — `docker compose build api` picks up
+the fix. Check what actually crashed with:
+
+```bash
+docker compose logs api --tail 40
+```
 
 Then make sure the database schema is current:
 
@@ -63,12 +144,12 @@ Expect: `All checks passed!`
 ```bash
 cd backend && mypy rogue && cd ..
 ```
-Expect: `Success: no issues found in 50 source files`
+Expect: `Success: no issues found in 57 source files`
 
 ```bash
 pytest tests/unit -q
 ```
-Expect: `207 passed`. (If Postgres isn't running, the persistence/API tests
+Expect: `254 passed`. (If Postgres isn't running, the persistence/API tests
 will error out with a connection-refused message — that's the DB, not a
 code problem; go back to section 0.)
 
@@ -82,6 +163,7 @@ pytest tests/unit/catalogue tests/unit/persistence/test_catalogue.py tests/unit/
 pytest tests/unit/spectrum tests/unit/persistence/test_spectrum.py tests/unit/api/test_spectrum_planner.py -v   # M5
 pytest tests/unit/domain/test_rf.py tests/unit/domain/test_recording.py tests/unit/domain/test_validation.py -v   # recording schedule/waterfall domain
 pytest tests/unit/compiler tests/unit/persistence/test_replay.py tests/unit/api/test_replay_compiler.py -v   # M6
+pytest tests/unit/domain/test_run.py tests/unit/execution tests/unit/persistence/test_run_execution.py tests/unit/api/test_runs.py -v   # M7
 ```
 (M3 is a frontend feature — its checks are `npm run typecheck`, `npm test`
 and `npm run e2e` from `frontend/`, see the M3 section below.)
@@ -200,7 +282,7 @@ only happens once) and builds `map-tiles/berlin.mbtiles`, scoped to the area
 the example/test scenarios already use. Then:
 
 ```bash
-docker-compose up -d tiles
+docker compose up -d tiles
 ```
 
 `frontend/.env.development` already points a plain `npm run dev` at
@@ -717,15 +799,18 @@ scenario the plan covers, since there's no scenario-duration field yet;
 CLAUDE.md section 4):
 
 ```bash
-curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/versions/$VERSION_NUMBER/compile \
-  -H "Content-Type: application/json" -d '{"duration_s": 20.0}' | python3 -m json.tool
+PLAN=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/versions/$VERSION_NUMBER/compile \
+  -H "Content-Type: application/json" -d '{"duration_s": 20.0}')
+PLAN_ID=$(echo "$PLAN" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+echo "$PLAN" | python3 -m json.tool
 ```
 
 Expect one `rf_windows` entry (the single link's occupied band, centered on
 2.412 GHz) and one `allocations` entry pointing at an `x440-1` channel (the
 first capability-profile channel whose tunable range covers 2.412 GHz),
 `safety_policy_outcome.tx_authorized: false` (compiling never authorizes
-transmission — that's M8), and `findings: []`.
+transmission — that's M8), and `findings: []`. Keep `$SCENARIO_ID`/`$PLAN_ID`
+around — the M7 section below continues from here.
 
 **4. List/fetch the compiled plan:**
 
@@ -739,6 +824,79 @@ curl -s http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans | python3 -m j
 longer fits any configured channel, so the response is `422` with a
 `rf_window_infeasible` BLOCKING finding and nothing is persisted (check
 step 4 again: the plan list is unchanged).
+
+## M7 — Simulated SDR execution
+
+M7 executes a compiled `ReplayPlan` (M6) through prepare → arm → start →
+stop against an in-process simulated adapter — no real hardware, no
+network, no separate Agent process (that's M8). This walkthrough continues
+from the M6 section above: reuse its `$SCENARIO_ID`/`$PLAN_ID` if your
+shell session still has them, or just re-run M6's steps 1-3 first.
+
+**1. Create and prepare a run** (reserves every allocated channel,
+verifies the plan's pinned recording hashes against the catalogue, then
+preflights/configures each channel — all in one call):
+
+```bash
+RUN=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs \
+  -H "Content-Type: application/json" -d '{"operator": "manual-check"}')
+RUN_ID=$(echo "$RUN" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+echo "$RUN" | python3 -m json.tool
+```
+
+Expect `"status": "prepared"` and three `events` (`reserved`,
+`prefetch_verified`, `configured`) plus one `device_leases` entry per
+allocated channel.
+
+**2. Walk it through arm → start → stop**, checking the event list grows
+(never shrinks) and the status advances at each step:
+
+```bash
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID/arm \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status'], len(d['events']))"
+
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID/start \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status'], len(d['events']))"
+
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID/stop \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status'], len(d['events']))"
+```
+
+Expect `armed 4`, `running 5`, `stopped 6` (exact counts depend on how many
+channels the plan allocated — one channel in this setup).
+
+**3. Confirm the run's evidence via `GET`:**
+
+```bash
+curl -s http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID \
+  | python3 -m json.tool
+```
+
+**4. Emergency-stop, from any state.** Create a second run and trigger
+emergency-stop mid-`running` — this path takes no request body, is not
+idempotency-key gated, and is always accepted (never 404s or 409s):
+
+```bash
+RUN2=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs \
+  -H "Content-Type: application/json" -d '{"operator": "manual-check"}')
+RUN2_ID=$(echo "$RUN2" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN2_ID/arm > /dev/null
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN2_ID/start > /dev/null
+
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN2_ID/emergency-stop \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])"
+```
+
+Expect `emergency_stopped`.
+
+**5. List every run for the plan:**
+
+```bash
+curl -s http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs | python3 -m json.tool
+```
+
+Expect both runs from steps 1 and 4, in creation order.
 
 ## Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`)
 
