@@ -61,14 +61,19 @@ def make_recording(**overrides: Any) -> IQRecording:
     return IQRecording(**kwargs)
 
 
-def make_link(recording_ref: RecordingReference) -> DroneRfLink:
+def make_link(
+    recording_ref: RecordingReference,
+    *,
+    band: RfBand | None = None,
+    frequency_hz: float = 2_412_000_000.0,
+) -> DroneRfLink:
     return DroneRfLink(
         role=RfLinkRole.C2,
-        band=RfBand(freq_min_hz=2_400_000_000.0, freq_max_hz=2_483_500_000.0),
+        band=band or RfBand(freq_min_hz=2_400_000_000.0, freq_max_hz=2_483_500_000.0),
         frequency_behaviour=FrequencyBehaviour(
             mode=FrequencySwitchingMode.SCRIPTED,
             scripted_changes=[
-                ScriptedFrequencyChange(at_offset=timedelta(0), frequency_hz=2_412_000_000.0)
+                ScriptedFrequencyChange(at_offset=timedelta(0), frequency_hz=frequency_hz)
             ],
         ),
         emissions=[RfEmission(recording=recording_ref, start_offset=timedelta(0))],
@@ -160,4 +165,37 @@ def make_plan_and_recordings(
         version, recordings, duration_s=duration_s, capability_profile=profile
     )
     assert plan.allocations, "expected the happy-path fixture to compile at least one allocation"
+    return plan, recordings
+
+
+def make_plan_and_recordings_two_channels(
+    duration_s: float = 20.0,
+) -> tuple[ReplayPlan, dict[tuple[UUID, int], IQRecording]]:
+    """Two links far enough apart in frequency to pack into two separate
+    windows/physical channels, each with its own distinct recording — for
+    asserting a channel's PREFLIGHT only receives *its own* recording(s),
+    not the whole plan's manifest (M9, ADR-009).
+    """
+    recording_a = make_recording(metadata_object_key="recordings/a/v1.sigmf-meta")
+    recording_b = make_recording(metadata_object_key="recordings/b/v1.sigmf-meta")
+    link_a = make_link(recording_a.reference(), frequency_hz=2_412_000_000.0)
+    link_b = make_link(
+        recording_b.reference(),
+        band=RfBand(freq_min_hz=5.15e9, freq_max_hz=5.25e9),
+        frequency_hz=5_200_000_000.0,
+    )
+    version = make_scenario_version(
+        [make_mission([link_a, link_b])],
+        [recording_a.reference(), recording_b.reference()],
+    )
+    recordings = {
+        recording_key(recording_a.reference()): recording_a,
+        recording_key(recording_b.reference()): recording_b,
+    }
+    profile = make_capability_profile()
+
+    plan = compile_replay_plan(
+        version, recordings, duration_s=duration_s, capability_profile=profile
+    )
+    assert len(plan.allocations) == 2, "expected each link to land on its own physical channel"
     return plan, recordings

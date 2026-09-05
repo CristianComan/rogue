@@ -257,6 +257,7 @@ def compute_spectrum_state(
                     freq_min_hz=freq_min,
                     freq_max_hz=freq_max,
                     headroom_hz=_headroom_hz(link, bandwidth),
+                    recording=emission.recording,
                 )
             )
 

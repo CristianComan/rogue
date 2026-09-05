@@ -43,6 +43,12 @@ dev = [
   "types-shapely>=2.0,<3.0",
   "pre-commit>=3.8,<5.0"
 ]
+# Only needed on a real X440 Agent host (M9, ADR-009) — not the control
+# plane, not simulated agents, not the test suite. Install with
+# `pip install .[x440]` on that bare-metal host (ADR-004).
+x440 = [
+  "uhd>=4.6,<5.0"
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["backend/rogue"]
@@ -79,5 +85,5 @@ mypy_path = ["backend", "agents"]
 exclude = ["backend/rogue/db/migrations/versions"]
 
 [[tool.mypy.overrides]]
-module = ["boto3.*", "botocore.*", "geoalchemy2.*", "nats.*"]
+module = ["boto3.*", "botocore.*", "geoalchemy2.*", "nats.*", "uhd.*"]
 ignore_missing_imports = true

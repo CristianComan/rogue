@@ -1,8 +1,9 @@
 """The real Agent runtime (M8, ADR-008) — separate from `main.py`'s process
-bootstrap/signal handling. Owns one `MockSDRAdapter` (still simulated
-hardware; real vendor adapters are M9/M10), answers commands on its own
-NATS command subject, publishes presence/telemetry, and runs a local
-watchdog independent of control-plane reachability
+bootstrap/signal handling. Owns one `SDRAdapter` (`mode` selects
+`MockSDRAdapter` for simulated hardware or `EttusX440Adapter` for a real
+X440, M9/ADR-009 — `DeepwaveAIR7311Adapter` is still M10), answers commands
+on its own NATS command subject, publishes presence/telemetry, and runs a
+local watchdog independent of control-plane reachability
 (`sdr-architecture.md` §7, CLAUDE.md rule 12).
 """
 
@@ -19,8 +20,9 @@ from nats.aio.client import Client as NATSClient
 from nats.aio.msg import Msg
 
 from agents.common import cache
+from agents.common.x440_adapter import EttusX440Adapter, UHDDevice
 from rogue.compiler.models import PhysicalTxChannelCapability
-from rogue.execution.adapter import AdapterOperationError, MockSDRAdapter
+from rogue.execution.adapter import AdapterOperationError, MockSDRAdapter, SDRAdapter
 from rogue.protocol.messages import (
     AgentAck,
     AgentCommand,
@@ -29,6 +31,12 @@ from rogue.protocol.messages import (
     AgentTelemetry,
 )
 from rogue.protocol.subjects import PRESENCE_SUBJECT, agent_command_subject, agent_telemetry_subject
+from rogue.settings import settings
+
+
+class UnknownAgentModeError(ValueError):
+    """Raised when `ROGUE_AGENT_MODE` doesn't match a known adapter."""
+
 
 logger = logging.getLogger("rogue.agent.runtime")
 
@@ -55,13 +63,36 @@ class AgentRuntime:
         capabilities: list[PhysicalTxChannelCapability],
         cache_dir: Path,
         mode: str = "simulated",
+        x440_device: UHDDevice | None = None,
     ) -> None:
         self.agent_id = agent_id
         self.mode = mode
         self.capabilities = capabilities
         self.cache_dir = cache_dir
-        self.adapter = MockSDRAdapter(capabilities=capabilities)
+        self.adapter: SDRAdapter = self._build_adapter(mode, capabilities, cache_dir, x440_device)
         self._contacts: dict[tuple[str, int], _ChannelContact] = {}
+
+    @staticmethod
+    def _build_adapter(
+        mode: str,
+        capabilities: list[PhysicalTxChannelCapability],
+        cache_dir: Path,
+        x440_device: UHDDevice | None,
+    ) -> SDRAdapter:
+        if mode == "simulated":
+            return MockSDRAdapter(capabilities=capabilities)
+        if mode == "x440":
+            # x440_device lets tests inject a fake UHDDevice; left None it
+            # opens a real one via settings.x440_device_args (requires the
+            # uhd package — see agents/common/x440_adapter.py's docstring).
+            return EttusX440Adapter(
+                capabilities=capabilities,
+                cache_dir=cache_dir,
+                device=x440_device,
+                device_args=settings.x440_device_args or "",
+                enable_real_tx=settings.enable_real_tx,
+            )
+        raise UnknownAgentModeError(f"unknown ROGUE_AGENT_MODE {mode!r}")
 
     def _touch(self, key: tuple[str, int], ttl_seconds: float | None = None) -> None:
         now = datetime.now(UTC)

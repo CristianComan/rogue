@@ -37,6 +37,15 @@ class Settings(BaseSettings):
     # Agent process instead (ADR-008) — a deployment-topology setting, not a
     # backwards-compatibility shim (CLAUDE.md §9).
     agent_dispatch_mode: Literal["in_process", "distributed"] = "in_process"
+    # Real-TX safety gate (CLAUDE.md §10, M9/ADR-009): read by the Agent
+    # process itself, not the control plane — each Agent host gates its own
+    # hardware locally. EttusX440Adapter.start() refuses to key the
+    # transmitter unless this is explicitly True.
+    enable_real_tx: bool = False
+    # UHD device address string for the one X440 this milestone targets
+    # (e.g. "addr=192.168.10.2"); multi-X440 capability-based scheduling is
+    # M10.
+    x440_device_args: str | None = None
 
     @field_validator("cors_allowed_origins", mode="before")
     @classmethod

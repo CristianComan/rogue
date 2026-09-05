@@ -157,6 +157,7 @@ def compute_rf_windows(
                     center_frequency_hz=b.center_frequency_hz,
                     bandwidth_hz=b.bandwidth_hz,
                     gain_offset_db=0.0,
+                    recording=b.recording,
                 )
                 for b in group
             ]

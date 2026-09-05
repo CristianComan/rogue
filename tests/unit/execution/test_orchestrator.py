@@ -10,7 +10,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
-from execution_factories import make_plan_and_recordings
+from execution_factories import make_plan_and_recordings, make_plan_and_recordings_two_channels
 
 from rogue.domain.run import RunEventKind, RunStatus, ScenarioRun
 from rogue.execution.adapter import MockSDRAdapter
@@ -48,6 +48,31 @@ async def test_prepare_run_happy_path_reserves_and_configures_then_advances() ->
     assert RunEventKind.RESERVED in kinds
     assert RunEventKind.PREFETCH_VERIFIED in kinds
     assert RunEventKind.CONFIGURED in kinds
+
+
+class _PreflightSpyAdapter(MockSDRAdapter):
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self.preflight_calls: dict[tuple[str, int], list[str]] = {}
+
+    async def preflight(self, device_id, channel_index, window, recordings) -> None:  # type: ignore[no-untyped-def]
+        self.preflight_calls[(device_id, channel_index)] = [str(r.id) for r in recordings]
+        await super().preflight(device_id, channel_index, window, recordings)
+
+
+async def test_prepare_run_only_preflights_each_channels_own_recording() -> None:
+    plan, recordings = make_plan_and_recordings_two_channels()
+    run = make_run(replay_plan_id=plan.id)
+    adapter = _PreflightSpyAdapter(capabilities=plan.capability_profile.channels)
+
+    prepared = await prepare_run(run, plan, recordings, adapter)
+
+    assert prepared.status == RunStatus.PREPARED
+    assert len(adapter.preflight_calls) == 2
+    for channel_key, seen_ids in adapter.preflight_calls.items():
+        assert len(seen_ids) == 1, f"{channel_key} should only see its own recording"
+    seen_across_channels = {rid for ids in adapter.preflight_calls.values() for rid in ids}
+    assert seen_across_channels == {str(r.id) for r in recordings.values()}
 
 
 async def test_prepare_run_requires_created_status() -> None:

@@ -18,7 +18,7 @@ Build ROGUE in bounded, testable increments. Do not begin with hardware-specific
 | M6 | Replay Plan compiler | scenario compiles to hardware-neutral executable plan | Done — `feature/replay-plan-compile`, merged to `develop` |
 | M7 | Simulated SDR execution | full prepare/arm/start/stop without hardware | Done — `feature/simulate-sdr-execution`, merged to `develop` |
 | M8 | Distributed SDR Agent | leases, cache, protocol, watchdog, telemetry | Done — `feature/distributed-sdr-agent` |
-| M9 | First real adapter | cabled/attenuated replay on one supported device | Planned |
+| M9 | First real adapter | cabled/attenuated replay on one supported device | Code complete, **hardware-unverified** — `feature/x440-real-adapter` (see ADR-009) |
 | M10 | X440 + AIR7311 capability-based scheduling | both hardware families behind common interface | Planned |
 | M11 | Multi-SDR synchronization | declared timing class demonstrated and measured | Planned |
 | M12 | Doppler/delay/phase processing | receiver-specific streams validated | Planned |
@@ -312,6 +312,55 @@ Explicitly out of scope (ADR-008): real vendor adapters (unchanged, M9/M10),
 timing sync beyond L1, persisted telemetry history, NATS auth/TLS, and a
 live per-request device-discovery endpoint beyond the presence-driven
 registry.
+
+### M9 — First real adapter (code complete, hardware-unverified)
+
+Branch `feature/x440-real-adapter`, based on `feature/distributed-sdr-agent`
+after M8. See ADR-009 for the full scope record — summary below.
+
+**This environment has no UHD/SoapySDR packages and no physical hardware
+attached**, so unlike every prior milestone this one's exit criterion
+(actual cabled/attenuated replay) was *not* met here. What was built and
+verified in software: `agents/common/x440_adapter.py`'s `EttusX440Adapter`
+implements `SDRAdapter` against a small `UHDDevice` seam (the real
+`import uhd` is isolated in one lazily-called function,
+`_open_real_uhd_device`, so the rest of the Agent process — including
+`simulated` mode — never needs `uhd` installed); a real-TX safety gate
+(`settings.enable_real_tx`/`ROGUE_ENABLE_REAL_TX`) refuses to key the
+transmitter unless explicitly set; `agents/common/agent.py`'s
+`AgentRuntime` now actually uses `mode` to pick `MockSDRAdapter` vs
+`EttusX440Adapter` (previously `mode` only reached the presence heartbeat
+label). `uhd` is a new optional dependency
+(`pip install .[x440]`), not part of the base install.
+
+While scoping this, found and fixed a real gap: the compiled `ReplayPlan`
+had no per-channel link to which recording plays where —
+`OccupiedBand`/`CompositeChannel` only carried `emission_id`. Added
+`recording: RecordingReference` to both
+(`rogue/spectrum/models.py`/`rogue/compiler/models.py`), populated at the
+one place each is constructed
+(`rogue/spectrum/occupancy.py`/`rogue/compiler/windows.py`) where the
+resolved reference was already available but previously discarded. This
+also tightened M8's behaviour: `rogue.execution.orchestrator.prepare_run`
+now sends each channel's `PREFLIGHT` only the recording(s) it actually
+needs, not the whole plan's manifest.
+
+Scope for this pass (ADR-009): one X440, exactly one recording per
+physical channel (a shared/composite window needing real baseband mixing
+is rejected, not silently mis-transmitted), `cf32_le` only, no artificial
+looping, no precise `end_seconds` alignment (needs L3/L4 timed commands),
+fixed default gain. `DeepwaveAIR7311Adapter` is unaffected — still M10.
+
+Backend test suite grew from 289 to 301 tests: `tests/unit/agents/
+test_x440_adapter.py` (fake `UHDDevice` — configure/arm/start/stop/
+emergency-stop sequencing, the real-TX gate refusing then allowing start,
+bounded-chunk streaming, discover() readback, single-recording/
+single-format rejection), `AgentRuntime` mode-selection tests, and compiler/
+orchestrator tests for the new per-channel recording linkage. `ruff`/
+`mypy` both pass with `uhd` absent, confirming the lazy-import boundary.
+`docs/testing/manual-verification-guide.md` gained an M9 section — written
+for the user to run on real lab hardware, explicitly not something this
+session confirmed.
 
 ## 4. Git workflow
 

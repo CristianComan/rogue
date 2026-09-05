@@ -12,9 +12,11 @@ from uuid import uuid4
 
 import pytest
 from agents.common import cache
-from agents.common.agent import AgentRuntime, _ChannelContact
+from agents.common.agent import AgentRuntime, UnknownAgentModeError, _ChannelContact
+from agents.common.x440_adapter import ChannelCapabilityReadback, ChannelConfig, EttusX440Adapter
 
 from rogue.compiler.models import RfWindow
+from rogue.execution.adapter import MockSDRAdapter
 from rogue.protocol.messages import AgentAck, AgentCommand, AgentCommandKind, RecordingCacheEntry
 
 DEVICE = "sim-1"
@@ -150,3 +152,49 @@ async def test_watchdog_does_not_stop_a_channel_within_timeout(tmp_path: Path) -
     status = await runtime.adapter.status(DEVICE, CHANNEL)
     assert status.armed is True
     assert (DEVICE, CHANNEL) in runtime._contacts
+
+
+# --- adapter mode selection (M9, ADR-009) ---
+
+
+class _FakeUHDDevice:
+    def num_tx_channels(self) -> int:
+        return 1
+
+    def discover_channel(self, channel: int) -> ChannelCapabilityReadback:
+        return ChannelCapabilityReadback(
+            tunable_ranges_hz=[(1e6, 6e9)], max_usable_bandwidth_hz=400e6, max_sample_rate_hz=500e6
+        )
+
+    def configure_channel(self, channel: int, **kwargs: float) -> None:
+        pass
+
+    def read_channel_config(self, channel: int) -> ChannelConfig:
+        return ChannelConfig(freq_hz=0.0, rate_hz=0.0, bandwidth_hz=0.0, gain_db=0.0)
+
+    def send_chunk(self, channel: int, samples: object) -> None:
+        pass
+
+    def end_burst(self, channel: int) -> None:
+        pass
+
+
+def test_simulated_mode_builds_a_mock_adapter(tmp_path: Path) -> None:
+    runtime = AgentRuntime(agent_id="a", capabilities=[], cache_dir=tmp_path, mode="simulated")
+
+    assert isinstance(runtime.adapter, MockSDRAdapter)
+
+
+def test_x440_mode_builds_ettus_adapter_with_the_injected_device(tmp_path: Path) -> None:
+    device = _FakeUHDDevice()
+
+    runtime = AgentRuntime(
+        agent_id="a", capabilities=[], cache_dir=tmp_path, mode="x440", x440_device=device
+    )
+
+    assert isinstance(runtime.adapter, EttusX440Adapter)
+
+
+def test_unknown_mode_raises(tmp_path: Path) -> None:
+    with pytest.raises(UnknownAgentModeError):
+        AgentRuntime(agent_id="a", capabilities=[], cache_dir=tmp_path, mode="not-a-real-mode")

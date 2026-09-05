@@ -12,6 +12,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from rogue.domain.common import FrozenRogueModel
+from rogue.domain.recording import RecordingReference
 from rogue.domain.rf import RfLinkRole
 from rogue.domain.validation import ValidationSeverity
 
@@ -32,6 +33,12 @@ class OccupiedBand(FrozenRogueModel):
     declared ``RfBand`` (band width minus occupied bandwidth, floored at 0)
     — not RF power/clipping headroom, which requires RF-window/composite-
     channel modelling (M6) and isn't computed here.
+
+    ``recording`` carries the active emission's ``RecordingReference``
+    through to M6's ``CompositeChannel`` (M9, ADR-009) — this is what lets a
+    real adapter know which cached SigMF asset to actually stream for a
+    given physical channel; it was dropped on the floor before M9 needed it
+    for anything.
     """
 
     mission_id: UUID
@@ -43,6 +50,7 @@ class OccupiedBand(FrozenRogueModel):
     freq_min_hz: float
     freq_max_hz: float
     headroom_hz: float
+    recording: RecordingReference
 
 
 class SpectrumFinding(FrozenRogueModel):

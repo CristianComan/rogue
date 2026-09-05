@@ -25,6 +25,7 @@ from typing import Literal
 from uuid import UUID
 
 from rogue.domain.common import FrozenRogueModel
+from rogue.domain.recording import RecordingReference
 from rogue.domain.rf import FrequencyTransitionType, RfLinkRole
 from rogue.domain.validation import ValidationSeverity
 
@@ -46,7 +47,14 @@ class RealizedFrequencyEvent(FrozenRogueModel):
 
 
 class CompositeChannel(FrozenRogueModel):
-    """One logical emission's contribution to an RfWindow at a point in time."""
+    """One logical emission's contribution to an RfWindow at a point in time.
+
+    ``recording`` (M9, ADR-009) is the emission's active
+    ``RecordingReference``, threaded through from ``OccupiedBand`` — the
+    only per-channel link to "which SigMF asset actually plays here" a real
+    adapter has, since ``Allocation``/``RfWindow`` otherwise carry only
+    frequency/timing, not recording identity.
+    """
 
     mission_id: UUID
     link_id: UUID
@@ -55,6 +63,7 @@ class CompositeChannel(FrozenRogueModel):
     center_frequency_hz: float
     bandwidth_hz: float
     gain_offset_db: float
+    recording: RecordingReference
 
 
 class RfWindow(FrozenRogueModel):

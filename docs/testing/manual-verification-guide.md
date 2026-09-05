@@ -1,4 +1,4 @@
-# Checking ROGUE yourself — manual verification guide (M0–M8)
+# Checking ROGUE yourself — manual verification guide (M0–M9)
 
 A hands-on walkthrough for verifying what's been built so far, milestone by
 milestone, without having to read the code. Everything is copy/paste — run
@@ -18,6 +18,7 @@ each block in a terminal from the repo root
 | M7 | Simulated SDR execution | `curl` against a running server |
 | — | Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`) | run the script, then `curl`/`psql` |
 | M8 | Distributed SDR Agent | full `docker compose up` + `curl`, killing a container mid-run |
+| M9 | First real adapter (X440) | **lab hardware required — not runnable in a dev sandbox** |
 
 Each section is independent — jump to whichever milestone you want to check.
 Section 0 is shared setup everything else depends on.
@@ -1051,6 +1052,100 @@ print([(a['agent_id'], a['status']) for a in json.load(sys.stdin)])
 ```
 
 Expect both agents `online` again.
+
+## M9 — First real adapter (Ettus X440)
+
+**This section was written but not run by the assistant** — the
+development environment used to build M9 has no `uhd` Python package and
+no physical X440 attached (confirmed: `import uhd` fails, `lsusb` shows no
+USRP-like device). ADR-009 records this explicitly: M9's exit criterion
+(actual cabled/attenuated replay) is unverified until *you* run the steps
+below in your lab. Everything else about `EttusX440Adapter` — command
+sequencing, the real-TX safety gate, bounded-chunk streaming — is covered
+by `tests/unit/agents/test_x440_adapter.py` against a fake `UHDDevice`,
+which *has* been run (`pytest tests/unit/agents/test_x440_adapter.py`).
+
+**Safety first — read this before connecting anything.** `ROGUE_ENABLE_REAL_TX=1`
+is a real transmit-enable switch (CLAUDE.md §10). Do not run this against
+an antenna. Use a cabled, attenuated setup: X440 TX port → fixed
+attenuator (enough to bring the output well under your spectrum
+analyzer's/receiver's safe input level) → spectrum analyzer or a second
+SDR configured as a receiver. Confirm your attenuation budget before
+enabling TX, not after.
+
+**1. Install the X440 extra on the Agent host** (bare-metal, not
+docker-compose — ADR-004):
+
+```bash
+pip install .[x440]
+python -c "import uhd; print(uhd.__version__)"
+```
+
+If this doesn't import cleanly, stop here and fix the UHD installation
+first — none of the following will work otherwise. Also confirm the device
+is enumerable:
+
+```bash
+uhd_find_devices
+```
+
+**2. Confirm `_open_real_uhd_device`'s UHD calls against your installed
+version.** `agents/common/x440_adapter.py`'s module docstring and ADR-009
+both flag this explicitly: the exact API shape (`uhd.usrp.MultiUSRP`,
+`StreamArgs`, `TuneRequest`, `TXMetadata`, range-object `.start()`/`.stop()`)
+was written against UHD's documented API, not exercised against a real
+install. A quick sanity script:
+
+```python
+import uhd
+usrp = uhd.usrp.MultiUSRP("addr=<your X440's address>")
+print(usrp.get_tx_num_channels())
+print(usrp.get_tx_freq_range(0))
+```
+
+Adjust `agents/common/x440_adapter.py` if any of these calls don't match
+your UHD version's actual signatures, then re-run
+`pytest tests/unit/agents/test_x440_adapter.py` to confirm the rest of the
+adapter's logic still holds.
+
+**3. Register a real recording** (same as M4/M8's steps — a short,
+`cf32_le` SigMF pair; `EttusX440Adapter` only supports `cf32_le` in this
+pass) via the control plane, compile a plan targeting the X440's
+capability profile, exactly as in the M8 section above, but stop before
+creating the run.
+
+**4. Start the Agent process in `x440` mode** on the machine physically
+connected to the X440 (not in docker-compose):
+
+```bash
+ROGUE_AGENT_ID=x440-lab-01 \
+ROGUE_AGENT_MODE=x440 \
+ROGUE_AGENT_DEVICE_IDS=x440-1 \
+ROGUE_X440_DEVICE_ARGS="addr=<your X440's address>" \
+ROGUE_ENABLE_REAL_TX=1 \
+ROGUE_NATS_URL=nats://<control-server-lab-address>:4222 \
+ROGUE_S3_ENDPOINT=http://<control-server-lab-address>:9000 \
+ROGUE_S3_ACCESS_KEY=rogue ROGUE_S3_SECRET_KEY=rogue_dev_password \
+python -m agents.common.main
+```
+
+Confirm it registers: `curl -s http://<control-server>:8000/agents` should
+list `x440-lab-01` online with real device-discovered capabilities (not
+the static default profile — `discover()` reads back actual UHD ranges).
+
+**5. Create+arm+start the run** exactly as in the M8 section, watching
+your spectrum analyzer for the expected signal at the compiled center
+frequency once `start` is called. Confirm `stop`/`emergency-stop` actually
+cease transmission (visually, on the analyzer) — this is the part no unit
+test can substitute for.
+
+**6. Confirm the safety gate** by repeating with `ROGUE_ENABLE_REAL_TX`
+unset (or `0`): `start` should fail with a `RealTxNotAuthorizedError`
+surfaced as a run `error` event, and the analyzer should show nothing.
+
+Report back (or file as a follow-up) anything in step 2 that needed
+adjusting — that feedback is exactly what turns this from "code complete,
+hardware-unverified" into "done."
 
 ## Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`)
 

@@ -43,6 +43,13 @@ Implementations initially include:
 
 Vendor libraries (UHD, SoapySDR, libiio or other device APIs) stay behind adapters.
 
+**Implemented (M9, ADR-009):** `agents/common/x440_adapter.py`'s
+`EttusX440Adapter` against UHD's native Python bindings (per ADR-005), a
+first cut behind a `UHDDevice` seam so it's unit-tested without the `uhd`
+package installed. **Not yet verified against real UHD/hardware** — see
+ADR-009's explicit scope record. `DeepwaveAIR7311Adapter` (SoapySDR) is
+still M10.
+
 ## 3. Initial laboratory hardware profile
 
 Initial target:
@@ -119,6 +126,14 @@ armed/transmitting past a timeout with no contact, entirely independent of
 whether the control plane is reachable — this is what actually covers a
 dead/partitioned control-plane process, as opposed to a dead Agent process
 (which the central sweep instead detects via a failed renewal request).
+
+**Implemented (M9, ADR-009):** the "explicit RF approval/environment gate"
+above is `settings.enable_real_tx`/`ROGUE_ENABLE_REAL_TX` (default
+`False`), checked in `EttusX440Adapter.start()` — refuses to key the
+transmitter and never touches the device otherwise. This is a local,
+per-Agent-host interlock, separate from the compiler's
+`SafetyPolicyOutcome.tx_authorized` (still a structural placeholder; a
+full policy engine is a separate, later concern).
 
 ## 8. Simulation first
 

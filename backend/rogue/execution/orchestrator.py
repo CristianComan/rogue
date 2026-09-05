@@ -58,6 +58,22 @@ def _window_for(plan: ReplayPlan, allocation: Allocation) -> RfWindow | None:
     return None
 
 
+def _recordings_for_window(
+    window: RfWindow, recordings: dict[tuple[UUID, int], IQRecording]
+) -> list[IQRecording]:
+    """The distinct recordings this window's composite channels actually
+    reference (M9, ADR-009) — what a channel's Agent needs cached, not the
+    plan's entire `recording_manifest` regardless of relevance.
+    """
+    seen: dict[tuple[UUID, int], IQRecording] = {}
+    for channel in window.channels:
+        key = (channel.recording.recording_id, channel.recording.version)
+        recording = recordings.get(key)
+        if recording is not None:
+            seen[key] = recording
+    return list(seen.values())
+
+
 class _RunBuilder:
     """Accumulates events/leases for one lifecycle call, appending only."""
 
@@ -171,7 +187,9 @@ async def prepare_run(
                 channel_index=channel_index,
             )
         try:
-            await adapter.preflight(device_id, channel_index, window, list(recordings.values()))
+            await adapter.preflight(
+                device_id, channel_index, window, _recordings_for_window(window, recordings)
+            )
             await adapter.configure(device_id, channel_index, window)
         except AdapterOperationError as exc:
             return builder.fail(str(exc), device_id=device_id, channel_index=channel_index)

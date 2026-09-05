@@ -18,6 +18,7 @@ import asyncio
 import hashlib
 import logging
 from pathlib import Path
+from uuid import UUID
 
 from rogue.protocol.messages import RecordingCacheEntry
 from rogue.storage import object_store
@@ -29,9 +30,20 @@ class CacheVerificationError(Exception):
     """Raised when a downloaded object's checksum doesn't match the pinned hash."""
 
 
+def data_path_for(cache_dir: Path, recording_id: UUID, version: int) -> Path:
+    """The cached ``.sigmf-data`` path for one recording version.
+
+    Public so a real vendor adapter (``agents/common/x440_adapter.py``, M9)
+    can find bytes this module already downloaded during ``PREFLIGHT``,
+    without re-deriving the naming convention.
+    """
+    return cache_dir / f"{recording_id}.v{version}.sigmf-data"
+
+
 def _paths(cache_dir: Path, entry: RecordingCacheEntry) -> tuple[Path, Path]:
     stem = f"{entry.recording_id}.v{entry.version}"
-    return cache_dir / f"{stem}.sigmf-meta", cache_dir / f"{stem}.sigmf-data"
+    data_path = data_path_for(cache_dir, entry.recording_id, entry.version)
+    return cache_dir / f"{stem}.sigmf-meta", data_path
 
 
 def _sha256_of_file(path: Path) -> str:
