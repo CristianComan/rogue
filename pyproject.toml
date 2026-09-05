@@ -51,6 +51,9 @@ packages = ["backend/rogue"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-ra --strict-markers"
+markers = [
+  "nats: requires a reachable NATS broker (e.g. `docker compose up -d nats`); skips itself otherwise",
+]
 
 [tool.ruff]
 target-version = "py312"

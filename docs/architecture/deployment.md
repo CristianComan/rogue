@@ -25,8 +25,8 @@ Real Agent processes never run this way — see section 4.
 
 ## 3. Control-plane container topology
 
-`docker-compose.yml` defines six services. Three are infrastructure,
-pulled as prebuilt images from a public registry; two are ROGUE's own
+`docker-compose.yml` defines eight services. Three are infrastructure,
+pulled as prebuilt images from a public registry; three are ROGUE's own
 code, built locally from the Dockerfiles in this repository; one is a
 one-shot setup step.
 
@@ -37,17 +37,17 @@ one-shot setup step.
 | `minio` | `minio/minio` image | S3-compatible SigMF recording and run-evidence storage |
 | `minio-init` | `minio/mc` image | One-shot: creates the MinIO bucket, then exits |
 | `api` | built from `backend/Dockerfile` | Control-plane FastAPI service |
-| `simulated-agent` | built from `agents/Dockerfile` | Simulated SDR Agent (no hardware) |
+| `simulated-agent-1`, `simulated-agent-2` | built from `agents/Dockerfile` | Two simulated SDR Agents (no hardware), each owning a disjoint device slice (M8, ADR-008) |
 
 ### Images vs. builds
 
 `postgres`, `nats`, and `minio`/`minio-init` are pulled, not built —
 Compose fetches them from the registry the first time and caches them
-locally. `api` and `simulated-agent` instead declare `build: {context:
-., dockerfile: ...}`, so Compose builds a fresh image from the current
-source tree every time the Dockerfile or its `COPY`-ed contents change.
-Infrastructure comes from upstream; ROGUE's own code is always built
-from what's actually in the repository.
+locally. `api` and `simulated-agent-1`/`simulated-agent-2` instead declare
+`build: {context: ., dockerfile: ...}`, so Compose builds a fresh image
+from the current source tree every time the Dockerfile or its `COPY`-ed
+contents change. Infrastructure comes from upstream; ROGUE's own code is
+always built from what's actually in the repository.
 
 ### Networking
 
@@ -153,7 +153,7 @@ internet egress.
 | | Local development | Lab / bench deployment |
 |---|---|---|
 | Control plane | `docker compose up` on a developer laptop | Same Compose stack, run on a dedicated control server |
-| Agent(s) | `simulated-agent` container, same machine | One bare-metal process per physical SDR host, per section 4 |
+| Agent(s) | `simulated-agent-1`/`simulated-agent-2` containers, same machine | One bare-metal process per physical SDR host, per section 4 |
 | Networking | Everything on one Compose network | Control server and Agent hosts on the same isolated lab network; Agent hosts reach the control server by its real lab address |
 
 Nothing about the domain model, RF compiler, or scenario code differs

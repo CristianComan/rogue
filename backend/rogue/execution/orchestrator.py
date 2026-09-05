@@ -17,9 +17,15 @@ from uuid import UUID
 
 from rogue.compiler.models import Allocation, ReplayPlan, RfWindow
 from rogue.domain.recording import IQRecording
-from rogue.domain.run import RunEvent, RunEventKind, RunStatus, ScenarioRun
+from rogue.domain.run import DeviceLease, RunEvent, RunEventKind, RunStatus, ScenarioRun
 from rogue.domain.validation import ValidationSeverity
-from rogue.execution.adapter import SDRAdapter, SimulatedDeviceFailureError
+from rogue.execution.adapter import AdapterOperationError, SDRAdapter
+
+# How long a reservation is valid without renewal (ADR-008). The lease-sweep
+# task (rogue.execution.lease_sweep) renews on an interval well under this,
+# so an unrenewed lease only lapses if the control plane itself has stopped
+# advancing runs.
+LEASE_TTL_SECONDS = 30.0
 
 
 class InvalidRunTransitionError(Exception):
@@ -126,8 +132,8 @@ async def prepare_run(
 
     for (device_id, channel_index), _allocation in channels.items():
         try:
-            lease = await adapter.reserve(device_id, channel_index, run.id)
-        except SimulatedDeviceFailureError as exc:
+            lease = await adapter.reserve(device_id, channel_index, run.id, LEASE_TTL_SECONDS)
+        except AdapterOperationError as exc:
             return builder.fail(str(exc), device_id=device_id, channel_index=channel_index)
         builder.leases.append(lease)
         builder.event(
@@ -165,9 +171,9 @@ async def prepare_run(
                 channel_index=channel_index,
             )
         try:
-            await adapter.preflight(device_id, channel_index, window)
+            await adapter.preflight(device_id, channel_index, window, list(recordings.values()))
             await adapter.configure(device_id, channel_index, window)
-        except SimulatedDeviceFailureError as exc:
+        except AdapterOperationError as exc:
             return builder.fail(str(exc), device_id=device_id, channel_index=channel_index)
         builder.event(
             RunEventKind.CONFIGURED,
@@ -187,7 +193,7 @@ async def arm_run(run: ScenarioRun, plan: ReplayPlan, adapter: SDRAdapter) -> Sc
     for (device_id, channel_index), allocation in _first_allocation_per_channel(plan).items():
         try:
             await adapter.arm(device_id, channel_index, allocation.start_seconds)
-        except SimulatedDeviceFailureError as exc:
+        except AdapterOperationError as exc:
             return builder.fail(str(exc), device_id=device_id, channel_index=channel_index)
         builder.event(
             RunEventKind.ARMED,
@@ -206,7 +212,7 @@ async def start_run(run: ScenarioRun, plan: ReplayPlan, adapter: SDRAdapter) -> 
     for device_id, channel_index in _first_allocation_per_channel(plan):
         try:
             await adapter.start(device_id, channel_index)
-        except SimulatedDeviceFailureError as exc:
+        except AdapterOperationError as exc:
             return builder.fail(str(exc), device_id=device_id, channel_index=channel_index)
         builder.event(
             RunEventKind.STARTED,
@@ -225,7 +231,7 @@ async def stop_run(run: ScenarioRun, plan: ReplayPlan, adapter: SDRAdapter) -> S
     for device_id, channel_index in _first_allocation_per_channel(plan):
         try:
             await adapter.stop(device_id, channel_index)
-        except SimulatedDeviceFailureError as exc:
+        except AdapterOperationError as exc:
             return builder.fail(str(exc), device_id=device_id, channel_index=channel_index)
         builder.event(
             RunEventKind.STOPPED,
@@ -266,3 +272,28 @@ async def emergency_stop_run(
                 severity=ValidationSeverity.BLOCKING,
             )
     return builder.advance(RunStatus.EMERGENCY_STOPPED)
+
+
+async def renew_leases(run: ScenarioRun, plan: ReplayPlan, adapter: SDRAdapter) -> ScenarioRun:
+    """Extend every lease's `expires_at` — the central half of lease
+    enforcement (ADR-008), called periodically by `rogue.execution.
+    lease_sweep` for any run still ARMED/RUNNING. On a renewal failure the
+    run is marked FAILED (mirrors every other lifecycle step); the caller
+    is responsible for then emergency-stopping a FAILED run that may still
+    have live channels — `renew_leases` itself only renews or fails.
+    """
+    if run.status not in (RunStatus.ARMED, RunStatus.RUNNING):
+        raise InvalidRunTransitionError(RunStatus.RUNNING, run.status, "renew leases for")
+
+    builder = _RunBuilder(run)
+    renewed_leases: list[DeviceLease] = []
+    for lease in run.device_leases:
+        try:
+            renewed_leases.append(await adapter.renew(lease, LEASE_TTL_SECONDS))
+        except AdapterOperationError as exc:
+            return builder.fail(
+                str(exc), device_id=lease.device_id, channel_index=lease.channel_index
+            )
+    builder.leases = renewed_leases
+    builder.event(RunEventKind.LEASE_RENEWED, f"renewed {len(renewed_leases)} lease(s)")
+    return builder.advance(run.status)

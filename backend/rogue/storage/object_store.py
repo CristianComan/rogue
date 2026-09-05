@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import boto3
@@ -84,6 +85,34 @@ def get_object_range(key: str, offset: int, length: int) -> bytes:
     response = _get_object(key, byte_range=(offset, length))
     body: bytes = response["Body"].read()
     return body
+
+
+def stream_object_to_file(key: str, destination: Path) -> ObjectDigest:
+    """Stream a (potentially large) object straight to a local file in
+    bounded chunks, computing its checksums in the same pass — one network
+    fetch, never the full object in memory at once. Used by the Agent's
+    local SigMF cache (agents/common/cache.py, ADR-008) to download
+    ``.sigmf-data`` objects, which ``get_object_bytes`` must not be used for
+    (CLAUDE.md's bounded-streaming coding rule).
+
+    Writes to a ``.part`` sibling and renames on success, so a failure or
+    checksum mismatch never leaves a partially-written file at ``destination``.
+    """
+    response = _get_object(key)
+    partial = destination.with_suffix(destination.suffix + ".part")
+    sha256_hasher = hashlib.sha256()
+    sha512_hasher = hashlib.sha512()
+    size = 0
+    with partial.open("wb") as f:
+        for chunk in response["Body"].iter_chunks(chunk_size=_STREAM_CHUNK_BYTES):
+            f.write(chunk)
+            sha256_hasher.update(chunk)
+            sha512_hasher.update(chunk)
+            size += len(chunk)
+    partial.replace(destination)
+    return ObjectDigest(
+        sha256=sha256_hasher.hexdigest(), sha512=sha512_hasher.hexdigest(), size_bytes=size
+    )
 
 
 def digest_object(key: str) -> ObjectDigest:

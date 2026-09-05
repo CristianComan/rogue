@@ -6,7 +6,7 @@ which sets the ROGUE_* variables consumed here).
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     # docker-compose.yml's api service actually sets) — this crashed api on
     # every `docker compose up` until caught here.
     cors_allowed_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173"]
+    # "in_process" (default) is what every unit test exercises: rogue.persistence.run
+    # talks to a single in-process MockSDRAdapter, unchanged since M7. docker-compose's
+    # api service sets this to "distributed" to dispatch over NATS to a real, separate
+    # Agent process instead (ADR-008) — a deployment-topology setting, not a
+    # backwards-compatibility shim (CLAUDE.md §9).
+    agent_dispatch_mode: Literal["in_process", "distributed"] = "in_process"
 
     @field_validator("cors_allowed_origins", mode="before")
     @classmethod

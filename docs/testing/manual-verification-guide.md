@@ -1,4 +1,4 @@
-# Checking ROGUE yourself — manual verification guide (M0–M7)
+# Checking ROGUE yourself — manual verification guide (M0–M8)
 
 A hands-on walkthrough for verifying what's been built so far, milestone by
 milestone, without having to read the code. Everything is copy/paste — run
@@ -17,6 +17,7 @@ each block in a terminal from the repo root
 | M6 | Replay Plan compiler | `curl` against a running server |
 | M7 | Simulated SDR execution | `curl` against a running server |
 | — | Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`) | run the script, then `curl`/`psql` |
+| M8 | Distributed SDR Agent | full `docker compose up` + `curl`, killing a container mid-run |
 
 Each section is independent — jump to whichever milestone you want to check.
 Section 0 is shared setup everything else depends on.
@@ -40,14 +41,15 @@ M0/M1 don't need anything beyond the venv.
 | `postgres` | PostgreSQL/PostGIS — every persisted scenario/draft/version/recording/replay plan | Yes (M2+) |
 | `minio` | S3-compatible object storage — SigMF recording bytes | Yes (M4+) |
 | `minio-init` | One-shot job that creates the `rogue` bucket in MinIO, then exits | Yes (M4+, runs once) |
-| `nats` | JetStream message broker — SDR Agent command/telemetry protocol | Not yet — no section below talks to it |
-| `api` | The FastAPI backend, containerized | No — this guide runs it directly with `uvicorn --reload` instead for a faster edit/reload loop; use this if you'd rather not set up a local Python env |
+| `nats` | JetStream message broker — SDR Agent command/telemetry protocol | Only for M8 |
+| `api` | The FastAPI backend, containerized | No, except for M8 — every other section runs it directly with `uvicorn --reload` instead for a faster edit/reload loop |
 | `ui` | The Vite frontend, containerized | No — this guide runs `frontend/dev.sh` directly instead, same reason |
 | `tiles` | Self-hosted MapLibre basemap tiles | Optional, M3 only — see that section |
-| `simulated-agent` | Placeholder simulated SDR Agent | Not yet exercised by any section below |
+| `simulated-agent-1`, `simulated-agent-2` | Simulated SDR Agent processes (M8) | Only for M8 — that section runs the whole stack via `docker compose up`, not `uvicorn --reload` |
 
-For everything in this guide you only need `postgres`, `minio` and
-`minio-init` running. Check whether they already are:
+For M0–M7 and the drone-corpus loader you only need `postgres`, `minio` and
+`minio-init` running (M8 needs the full stack — see that section). Check
+whether they already are:
 
 ```bash
 docker ps --filter "name=rogue-postgres" --filter "name=rogue-minio"
@@ -897,6 +899,158 @@ curl -s http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs 
 ```
 
 Expect both runs from steps 1 and 4, in creation order.
+
+## M8 — Distributed SDR Agent
+
+M8 replaces M7's in-process `MockSDRAdapter` with real, separate Agent
+processes reached over NATS (still simulated hardware — see ADR-008). This
+section needs the **full** stack, not just `postgres`/`minio`, and drives
+everything through the containerized `api` rather than a local `uvicorn`.
+
+**1. Build and start the full stack:**
+
+```bash
+docker compose up -d --build postgres nats minio minio-init api simulated-agent-1 simulated-agent-2
+```
+
+Wait a few seconds, then confirm both Agents registered themselves:
+
+```bash
+curl -s http://localhost:8000/agents | python3 -c "
+import sys, json
+for a in json.load(sys.stdin):
+    print(a['agent_id'], a['status'], len(a['capabilities']), 'channels')
+"
+```
+
+Expect `sim-agent-01 online 12 channels` and `sim-agent-02 online 12
+channels` — `sim-agent-01` owns `x440-1`/`air7311-1`, `sim-agent-02` owns
+`x440-2`/`air7311-2` (`ROGUE_AGENT_DEVICE_IDS` in `docker-compose.yml`).
+
+**2. Upload a recording and compile a plan**, same shape as M6's section but
+against the containerized stack (`http://localhost:9000` for MinIO,
+`http://localhost:8000` for the API both still work the same way):
+
+```bash
+python3 -c "
+import hashlib, json, struct
+import boto3
+samples = b''.join(struct.pack('<ff', 0.001 * i, -0.001 * i) for i in range(100))
+meta = {'global': {'core:datatype': 'cf32_le', 'core:sample_rate': 1_000_000,
+                    'core:sha512': hashlib.sha512(samples).hexdigest()},
+        'captures': [{'core:sample_start': 0, 'core:frequency': 2_400_000_000}], 'annotations': []}
+s3 = boto3.client('s3', endpoint_url='http://localhost:9000',
+                   aws_access_key_id='rogue', aws_secret_access_key='rogue_dev_password')
+s3.put_object(Bucket='rogue', Key='m8-manual-check/test.sigmf-meta', Body=json.dumps(meta).encode())
+s3.put_object(Bucket='rogue', Key='m8-manual-check/test.sigmf-data', Body=samples)
+"
+
+SCENARIO=$(curl -s -X POST http://localhost:8000/scenarios -H "Content-Type: application/json" -d '{
+  "name": "m8-manual-check", "owner": "manual",
+  "area_of_operation": {"type":"Polygon","coordinates":[[[13.0,52.0],[13.5,52.0],[13.5,52.5],[13.0,52.5],[13.0,52.0]]]}
+}')
+SCENARIO_ID=$(echo "$SCENARIO" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+DRAFT=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts -H "Content-Type: application/json" -d '{"author":"manual-check"}')
+DRAFT_ID=$(echo "$DRAFT" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+RECORDING=$(curl -s -X POST http://localhost:8000/recordings -H "Content-Type: application/json" -d '{
+  "metadata_object_key": "m8-manual-check/test.sigmf-meta", "data_object_key": "m8-manual-check/test.sigmf-data"
+}')
+RECORDING_ID=$(echo "$RECORDING" | python3 -c "import sys,json;print(json.load(sys.stdin)['recording']['id'])")
+
+curl -s -X PUT http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID \
+  -H "Content-Type: application/json" -d '{
+    "author": "manual-check", "expected_revision": 0,
+    "zones": [], "receivers": [], "timeline_events": [],
+    "missions": [{
+      "name": "recon-1",
+      "platform": {"name": "Quad", "category": "multirotor", "max_speed_mps": 18.0},
+      "trajectory": {"template": "waypoint_transit", "default_speed_mps": 12.0, "waypoints": [
+        {"sequence_index": 0, "position": {"type": "Point", "coordinates": [13.4, 52.2]}, "altitude_m": 100.0},
+        {"sequence_index": 1, "position": {"type": "Point", "coordinates": [13.45, 52.25]}, "altitude_m": 100.0}
+      ]},
+      "rf_links": [{
+        "role": "c2", "band": {"freq_min_hz": 2.4e9, "freq_max_hz": 2.4835e9},
+        "frequency_behaviour": {"mode": "scripted", "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.412e9}]},
+        "emissions": [{"recording": {"recording_id": "'"$RECORDING_ID"'", "version": 1}}]
+      }]
+    }]
+  }' > /dev/null
+
+VERSION=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID/publish)
+VERSION_NUMBER=$(echo "$VERSION" | python3 -c "import sys,json;print(json.load(sys.stdin)['version_number'])")
+PLAN=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/versions/$VERSION_NUMBER/compile \
+  -H "Content-Type: application/json" -d '{"duration_s": 20.0}')
+PLAN_ID=$(echo "$PLAN" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+echo "$PLAN" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['allocations'])"
+```
+
+Expect the allocation to land on `x440-1` (the first capability-profile
+channel whose tunable range covers 2.412 GHz) — that's `sim-agent-01`'s device.
+
+**3. Create+prepare a run over the real distributed path**, then check the
+owning Agent's logs show a real cache download — this is the part that
+didn't exist before M8 (M7 only re-checked the catalogue's stored hash,
+never actually cached bytes anywhere):
+
+```bash
+RUN=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs \
+  -H "Content-Type: application/json" -d '{"operator": "m8-manual-check"}')
+RUN_ID=$(echo "$RUN" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+echo "$RUN" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status'], [e['kind'] for e in d['events']])"
+
+docker compose logs simulated-agent-1 --tail=5
+```
+
+Expect `prepared ['reserved', 'prefetch_verified', 'configured']` and a
+`cache miss ... downloading` line in the Agent's log.
+
+**4. Arm and start it, then watch the central lease-sweep renew the lease**
+without you doing anything — this runs on a ~10s interval
+(`LEASE_TTL_SECONDS / 3`) purely from the API process's background task:
+
+```bash
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID/arm > /dev/null
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID/start > /dev/null
+
+sleep 12
+curl -s http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['device_leases'][0]['expires_at'], [e['kind'] for e in d['events']])"
+```
+
+Expect at least one `lease_renewed` event and an `expires_at` further in the
+future than when you started.
+
+**5. Kill the owning Agent mid-`RUNNING`** and confirm the central sweep
+reaches a safe terminal state on its own:
+
+```bash
+docker compose stop simulated-agent-1
+
+sleep 20
+curl -s http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status']); [print(e['kind'], e['message']) for e in d['events'][-2:]]"
+```
+
+Expect `emergency_stopped`, with the last two events being `error`s
+explaining the Agent didn't respond to the renewal/emergency-stop commands
+— this is expected and correct: the run still lands in a terminal,
+never-transmitting-again state even though the physical stop command
+couldn't reach a dead process. (In real hardware this exact scenario is
+what the Agent-side *local* watchdog independently covers — it isn't
+exercised here since the Agent process itself is the one that's dead.)
+
+**6. Bring the Agent back** and confirm it re-registers:
+
+```bash
+docker compose start simulated-agent-1
+sleep 7
+curl -s http://localhost:8000/agents | python3 -c "
+import sys, json
+print([(a['agent_id'], a['status']) for a in json.load(sys.stdin)])
+"
+```
+
+Expect both agents `online` again.
 
 ## Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`)
 

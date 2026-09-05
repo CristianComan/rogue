@@ -57,16 +57,26 @@ The design baseline states that native X440 RF coverage does not cover 5.2/5.8 G
 ## 4. Agent command model
 
 Versioned commands include:
-- reserve / release;
-- prefetch / verify;
+- reserve / release / renew-lease;
+- preflight (prefetch/verify);
 - configure;
 - arm;
-- start-at;
-- stop;
+- start / stop;
 - emergency-stop;
 - status.
 
 Every command/ACK includes correlation ID, sequence, timestamps, state and structured errors. Commands are idempotent, expire, and are rejected when stale or outside an active lease.
+
+**Implemented (M8, ADR-008):** `backend/rogue/protocol/messages.py` defines
+`AgentCommand`/`AgentAck` (plus `AgentPresence`/`AgentTelemetry`) as the
+concrete versioned shapes above; `subjects.py` gives each Agent its own
+NATS request-reply command subject (`rogue.agents.{agent_id}.cmd`) and
+telemetry subject (`rogue.agents.{agent_id}.telemetry`), alongside the
+shared presence subject. `rogue.execution.remote_adapter.RemoteAgentAdapter`
+is the control-plane side; `agents/common/agent.AgentRuntime` is the Agent
+side. Lease expiry is real (`DeviceLease.expires_at`): the central
+`rogue.execution.lease_sweep` task renews active runs' leases on a short
+interval and emergency-stops one that lapses (rule 12's central half).
 
 ## 5. Timing and synchronization classes
 
@@ -98,6 +108,17 @@ Agent safety is independent of control-plane availability:
 - record stop acknowledgements and faults.
 
 Real hardware tests must never automatically enable uncontrolled over-the-air transmission.
+
+**Implemented (M8, ADR-008):** enforced twice, matching CLAUDE.md rule 12.
+Centrally, `rogue.execution.lease_sweep` renews every ARMED/RUNNING run's
+leases and emergency-stops one whose lease lapses or fails to renew — this
+still depends on the control plane itself being up. Locally,
+`agents/common/agent.AgentRuntime` tracks last control-plane contact per
+leased channel and emergency-stops its own adapter if a channel stays
+armed/transmitting past a timeout with no contact, entirely independent of
+whether the control plane is reachable — this is what actually covers a
+dead/partitioned control-plane process, as opposed to a dead Agent process
+(which the central sweep instead detects via a failed renewal request).
 
 ## 8. Simulation first
 

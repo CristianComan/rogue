@@ -19,6 +19,7 @@ from rogue.execution.orchestrator import (
     arm_run,
     emergency_stop_run,
     prepare_run,
+    renew_leases,
     start_run,
     stop_run,
 )
@@ -217,6 +218,48 @@ async def test_emergency_stop_from_failed_reaches_emergency_stopped() -> None:
 class _AlwaysRaisingAdapter(MockSDRAdapter):
     async def emergency_stop(self, device_id: str, channel_index: int) -> None:
         raise RuntimeError("hardware bus fault")
+
+
+# --- lease renewal (M8, ADR-008) ---
+
+
+async def test_renew_leases_extends_expiry_and_records_one_event() -> None:
+    plan, recordings = make_plan_and_recordings()
+    adapter = MockSDRAdapter(capabilities=plan.capability_profile.channels)
+    run = make_run(replay_plan_id=plan.id)
+    prepared = await prepare_run(run, plan, recordings, adapter)
+    armed = await arm_run(prepared, plan, adapter)
+    original_expiries = {lease.id: lease.expires_at for lease in armed.device_leases}
+
+    renewed = await renew_leases(armed, plan, adapter)
+
+    assert renewed.status == RunStatus.ARMED
+    assert renewed.events[-1].kind == RunEventKind.LEASE_RENEWED
+    assert len(renewed.device_leases) == len(armed.device_leases)
+    for lease in renewed.device_leases:
+        assert lease.expires_at > original_expiries[lease.id]
+
+
+async def test_renew_leases_works_from_running() -> None:
+    plan, recordings = make_plan_and_recordings()
+    adapter = MockSDRAdapter(capabilities=plan.capability_profile.channels)
+    run = make_run(replay_plan_id=plan.id)
+    prepared = await prepare_run(run, plan, recordings, adapter)
+    armed = await arm_run(prepared, plan, adapter)
+    running = await start_run(armed, plan, adapter)
+
+    renewed = await renew_leases(running, plan, adapter)
+
+    assert renewed.status == RunStatus.RUNNING
+
+
+async def test_renew_leases_requires_armed_or_running_status() -> None:
+    plan, _recordings = make_plan_and_recordings()
+    run = make_run(replay_plan_id=plan.id, status=RunStatus.PREPARED)
+    adapter = MockSDRAdapter(capabilities=plan.capability_profile.channels)
+
+    with pytest.raises(InvalidRunTransitionError):
+        await renew_leases(run, plan, adapter)
 
 
 async def test_emergency_stop_records_error_but_still_reaches_terminal_state() -> None:
