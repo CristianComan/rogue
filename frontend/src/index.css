@@ -1,0 +1,38 @@
+:root {
+  color-scheme: light dark;
+  font:
+    14px/1.4 system-ui,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* This is an application shell, not a scrolling document: html/body/#root
+   need a definite height so the editor's `height: 100%` panes (map,
+   properties, timeline) have something real to resolve against — a
+   percentage height only resolves against an ancestor with a definite
+   height, not just `min-height`. */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+}
+
+/* Browsers default <fieldset> to min-width: min-content, which refuses to
+   shrink below its content's natural width — inside the fixed-width
+   properties column (EditorLayout.tsx), this forced every property form
+   (ZoneForm, MissionForm, RfLinkForm, ...) wider than the column regardless
+   of flexWrap/overflow rules applied to their contents, pushing fields like
+   RfLinkForm's emission "Version" input past the visible area. */
+fieldset {
+  min-width: 0;
+}

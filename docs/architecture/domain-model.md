@@ -107,3 +107,19 @@ Intentional RF overlap must not be rejected by the domain schema.
 ## 7. Portable scenario representation
 
 Use versioned JSON with GeoJSON geometry and stable recording references. Physical SDR/channel assignments are not canonical scenario content. Optional resource preferences/constraints may be expressed, but actual allocations are stored only in the run manifest.
+
+## 8. Implementation status
+
+M1 implemented this document as typed Pydantic v2 models in `backend/rogue/domain/`, with tests
+in `tests/unit/domain/` and an example scenario at `examples/scenarios/single-drone-orbit.yaml`.
+Notable implementation choices, not otherwise specified above:
+
+- GeoJSON `Point`/`LineString`/`Polygon` are minimal hand-rolled types (`backend/rogue/domain/common.py`)
+  rather than an external GeoJSON library, to avoid an added dependency for a shape this narrow.
+- `Trajectory` treats authored `Waypoint`s as canonical; GeoJSON `LineString` export is a derived
+  helper, not duplicated storage.
+- `ResourcePreference` (band-plan sync-class/agent-tag hints only, no device/serial/channel field)
+  is the concrete shape of the "optional resource preferences" mentioned above.
+- `SDRAgent`/`SDRDevice`/`PhysicalTxChannel` and `ScenarioRun` (including `RunManifest`/`ReplayPlan`)
+  are runtime/execution concerns and are deliberately not modelled by M1; they belong to M6+ per
+  `docs/architecture/implementation-plan.md`.

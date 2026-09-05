@@ -65,6 +65,7 @@ services:
       ROGUE_S3_BUCKET: ${MINIO_BUCKET:-rogue}
       ROGUE_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-rogue}
       ROGUE_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-rogue_dev_password}
+      ROGUE_CORS_ALLOWED_ORIGINS: http://localhost:${ROGUE_UI_PORT:-5173}
     ports:
       - "${ROGUE_API_PORT:-8000}:8000"
     depends_on:
@@ -74,6 +75,32 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+
+  tiles:
+    image: maptiler/tileserver-gl:latest
+    command: ["--file", "/data/berlin.mbtiles"]
+    volumes:
+      - ./map-tiles:/data:ro
+    ports:
+      - "${ROGUE_TILES_PORT:-8081}:8080"
+
+  ui:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    environment:
+      VITE_API_BASE_URL: http://localhost:${ROGUE_API_PORT:-8000}
+      # Self-hosted basemap (scripts/build_map_tiles.sh + the `tiles`
+      # service above) — like VITE_API_BASE_URL, this is read by the Vite
+      # dev server but shipped into client-side JS that runs in the
+      # operator's browser on the host, so it must be the host-published
+      # port (localhost:8081), not the tiles service's in-network address.
+      VITE_MAP_STYLE_URL: http://localhost:${ROGUE_TILES_PORT:-8081}/styles/basic-preview/style.json
+    ports:
+      - "${ROGUE_UI_PORT:-5173}:5173"
+    depends_on:
+      - api
+      - tiles
 
   simulated-agent:
     build:

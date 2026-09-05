@@ -39,6 +39,8 @@ Thumbs.db
 *.key
 *.p12
 *.pfx
+*_token.txt
+docs/guidance/git_token.txt
 
 # --- Logs / runtime ---
 *.log
@@ -46,6 +48,7 @@ logs/
 runtime/
 tmp/
 .cache/
+.claude/launch.json
 
 # --- Databases / local volumes ---
 postgres-data/
@@ -62,6 +65,9 @@ datasets/
 
 # SigMF metadata may be committed when intentionally used as a
 # test fixture. Large associated sample data must remain external.
+
+# --- Self-hosted basemap tiles (scripts/build_map_tiles.sh) ---
+map-tiles/
 
 # --- SDR/vendor generated data ---
 uhd_images/

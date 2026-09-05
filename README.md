@@ -26,9 +26,11 @@ Out of scope: Electronic Attack, operational C2, sensor fusion, autonomous engag
 - `docs/architecture/sdr-architecture.md` — SDR Agent, hardware abstraction, initial X440/AIR7311 pool, timing and safety.
 - `docs/architecture/verification-validation.md` — software, HIL and independent RF validation strategy.
 - `docs/architecture/implementation-plan.md` — phased implementation and Claude-sized work packages.
+- `docs/architecture/deployment.md` — control-plane container topology and bare-metal SDR Agent node deployment.
 - `docs/decisions/ADR-001-replay-plan.md` — Scenario → Replay Plan → SDR Agents boundary.
 - `docs/decisions/ADR-002-hardware-independent-scenarios.md` — no canonical scenario-to-device binding.
 - `docs/decisions/ADR-003-composite-rf-windows.md` — physical TX channels as wideband RF windows.
+- `docs/decisions/ADR-004-bare-metal-sdr-agent-deployment.md` — SDR Agent nodes deploy as bare-metal processes, not containers.
 - `CLAUDE.md` — mandatory development instructions for Claude Code.
 
 ## Development principle
