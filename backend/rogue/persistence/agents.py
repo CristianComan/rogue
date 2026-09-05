@@ -13,8 +13,9 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from rogue.compiler.models import HardwareCapabilityProfile
 from rogue.db.models import SDRAgentORM
-from rogue.domain.agent import SDRAgentRecord
+from rogue.domain.agent import AgentStatus, SDRAgentRecord
 from rogue.protocol.messages import AgentPresence
 
 
@@ -65,3 +66,26 @@ async def get_agent_for_device(session: AsyncSession, device_id: str) -> str | N
         if any(channel.device_id == device_id for channel in record.capabilities):
             return record.agent_id
     return None
+
+
+async def aggregate_capability_profile(session: AsyncSession) -> HardwareCapabilityProfile | None:
+    """A `HardwareCapabilityProfile` built from every currently-`online`
+    registered agent's reported capabilities, spanning both hardware
+    families (the registry doesn't distinguish by family — an X440 agent
+    and an AIR7311 agent both just contribute `PhysicalTxChannelCapability`
+    entries) — the "runtime discovery is authoritative" half of CLAUDE.md
+    rule 10 (M10, ADR-010).
+
+    Returns `None` if no agent is currently online, so the caller's static-
+    default fallback stays an explicit decision rather than this silently
+    returning an empty profile that would reject every compile.
+    """
+    channels = [
+        channel
+        for record in await list_agents(session)
+        if record.status == AgentStatus.ONLINE
+        for channel in record.capabilities
+    ]
+    if not channels:
+        return None
+    return HardwareCapabilityProfile(id="live-agent-registry", channels=channels)

@@ -19,7 +19,7 @@ Build ROGUE in bounded, testable increments. Do not begin with hardware-specific
 | M7 | Simulated SDR execution | full prepare/arm/start/stop without hardware | Done — `feature/simulate-sdr-execution`, merged to `develop` |
 | M8 | Distributed SDR Agent | leases, cache, protocol, watchdog, telemetry | Done — `feature/distributed-sdr-agent` |
 | M9 | First real adapter | cabled/attenuated replay on one supported device | Code complete, **hardware-unverified** — `feature/x440-real-adapter` (see ADR-009) |
-| M10 | X440 + AIR7311 capability-based scheduling | both hardware families behind common interface | Planned |
+| M10 | X440 + AIR7311 capability-based scheduling | both hardware families behind common interface | Code complete, **hardware-unverified** — `feature/air7311-and-capability-scheduling` (see ADR-010) |
 | M11 | Multi-SDR synchronization | declared timing class demonstrated and measured | Planned |
 | M12 | Doppler/delay/phase processing | receiver-specific streams validated | Planned |
 | M13 | TDOA/AOA receiver stimulation | relative delay/phase requirements demonstrated | Planned |
@@ -361,6 +361,53 @@ orchestrator tests for the new per-channel recording linkage. `ruff`/
 `docs/testing/manual-verification-guide.md` gained an M9 section — written
 for the user to run on real lab hardware, explicitly not something this
 session confirmed.
+
+### M10 — X440 + AIR7311 capability-based scheduling (code complete, hardware-unverified)
+
+Branch `feature/air7311-and-capability-scheduling`, based on
+`feature/x440-real-adapter` after M9. See ADR-010 for the full scope
+record — summary below.
+
+**Same environment constraint as M9: no SoapySDR bindings and no AIR7311
+hardware here**, so this milestone's exit criterion (both families
+demonstrated on real hardware) was not met in this session either.
+
+`agents/common/air7311_adapter.py`'s `DeepwaveAIR7311Adapter` implements
+`SDRAdapter` against native SoapySDR (per ADR-005). Rather than duplicate
+M9's adapter, the vendor-agnostic logic (lease bookkeeping, the real-TX
+safety gate, bounded-chunk streaming) was extracted from
+`EttusX440Adapter` into a new shared
+`agents/common/sdr_adapter_base.StreamingSDRAdapter`; both adapters are now
+thin subclasses supplying only their vendor-specific device-opening
+function. Unlike `uhd`, SoapySDR has no reliable pip-installable package,
+so no `pyproject.toml` extra was added for it — provisioning is documented
+in the manual-verification-guide instead, matching `deployment.md` §7's
+already-flagged bare-metal-driver-provisioning gap. `AgentRuntime` gained
+an `"air7311"` mode.
+
+Separately, closed a real gap in "capability-based scheduling": M6's
+allocator already picks physical channels by capability
+(tunable-range/bandwidth checks), but it only ever scheduled against the
+static `DEFAULT_CAPABILITY_PROFILE` — never the live capabilities M8's
+agent registry already collects. New
+`rogue.persistence.agents.aggregate_capability_profile` builds a
+`HardwareCapabilityProfile` spanning every currently-online agent of
+either family; `rogue.persistence.replay.compile_and_store_replay_plan`
+now uses it by default when at least one agent is online, falling back to
+the static default only when none is — making CLAUDE.md rule 10's "static
+profiles are defaults only" actually true. Existing tests are unaffected
+(they compile against an empty agent registry, so the fallback preserves
+prior behaviour exactly — verified, not just asserted).
+
+Backend test suite grew from 301 to 317 tests:
+`tests/unit/agents/test_air7311_adapter.py` (mirrors M9's X440 test shape
+against a fake `SoapyDevice`), an `AgentRuntime` mode-selection test,
+`aggregate_capability_profile` tests (empty registry, all-stale, spans two
+families, excludes a stale agent), and `compile_and_store_replay_plan`
+tests proving the live-vs-static distinction by device_id. `ruff`/`mypy`
+pass with neither `uhd` nor `SoapySDR` installed.
+`docs/testing/manual-verification-guide.md` gained an M10 section for the
+user's lab.
 
 ## 4. Git workflow
 

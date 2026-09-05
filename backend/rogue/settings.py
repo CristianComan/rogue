@@ -42,10 +42,12 @@ class Settings(BaseSettings):
     # hardware locally. EttusX440Adapter.start() refuses to key the
     # transmitter unless this is explicitly True.
     enable_real_tx: bool = False
-    # UHD device address string for the one X440 this milestone targets
-    # (e.g. "addr=192.168.10.2"); multi-X440 capability-based scheduling is
-    # M10.
+    # UHD device address string for the one X440 an x440-mode Agent host
+    # targets (e.g. "addr=192.168.10.2").
     x440_device_args: str | None = None
+    # SoapySDR device args string for the one AIR7311 an air7311-mode
+    # Agent host targets (M10, ADR-010).
+    air7311_device_args: str | None = None
 
     @field_validator("cors_allowed_origins", mode="before")
     @classmethod

@@ -43,12 +43,13 @@ Implementations initially include:
 
 Vendor libraries (UHD, SoapySDR, libiio or other device APIs) stay behind adapters.
 
-**Implemented (M9, ADR-009):** `agents/common/x440_adapter.py`'s
-`EttusX440Adapter` against UHD's native Python bindings (per ADR-005), a
-first cut behind a `UHDDevice` seam so it's unit-tested without the `uhd`
-package installed. **Not yet verified against real UHD/hardware** — see
-ADR-009's explicit scope record. `DeepwaveAIR7311Adapter` (SoapySDR) is
-still M10.
+**Implemented (M9/M10, ADR-009/ADR-010):** `agents/common/x440_adapter.py`'s
+`EttusX440Adapter` (UHD) and `agents/common/air7311_adapter.py`'s
+`DeepwaveAIR7311Adapter` (native SoapySDR), both thin subclasses of
+`agents/common/sdr_adapter_base.StreamingSDRAdapter`, which holds the
+vendor-agnostic lease/streaming logic behind a `RealDeviceSeam` so both are
+unit-tested without either vendor SDK installed. **Neither is verified
+against real hardware** — see ADR-009/ADR-010's explicit scope records.
 
 ## 3. Initial laboratory hardware profile
 
@@ -60,6 +61,16 @@ Initial target:
 Static profiles are planning defaults only. Runtime discovery/readback is authoritative.
 
 The design baseline states that native X440 RF coverage does not cover 5.2/5.8 GHz. Therefore those bands are normally assigned to AIR7311-capable paths unless an explicit external frequency-conversion chain is modeled. X440 paths may serve 2.4 GHz and other supported sub-4-GHz windows.
+
+**Implemented (M10, ADR-010):** `rogue.persistence.agents.
+aggregate_capability_profile` builds a live `HardwareCapabilityProfile`
+from every currently-online registered Agent of either family;
+`rogue.persistence.replay.compile_and_store_replay_plan` schedules against
+it by default, falling back to the static `DEFAULT_CAPABILITY_PROFILE`
+only when no Agent is online — the compiler's existing capability-based
+channel selection (`rogue/compiler/allocation.py`, unchanged) now actually
+runs against real, connected hardware of both families instead of always
+the illustrative default.
 
 ## 4. Agent command model
 

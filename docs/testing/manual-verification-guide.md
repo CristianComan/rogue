@@ -1,4 +1,4 @@
-# Checking ROGUE yourself — manual verification guide (M0–M9)
+# Checking ROGUE yourself — manual verification guide (M0–M10)
 
 A hands-on walkthrough for verifying what's been built so far, milestone by
 milestone, without having to read the code. Everything is copy/paste — run
@@ -19,6 +19,7 @@ each block in a terminal from the repo root
 | — | Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`) | run the script, then `curl`/`psql` |
 | M8 | Distributed SDR Agent | full `docker compose up` + `curl`, killing a container mid-run |
 | M9 | First real adapter (X440) | **lab hardware required — not runnable in a dev sandbox** |
+| M10 | AIR7311 adapter + live capability scheduling | **lab hardware required** for AIR7311; live-scheduling check is runnable in software |
 
 Each section is independent — jump to whichever milestone you want to check.
 Section 0 is shared setup everything else depends on.
@@ -1146,6 +1147,133 @@ surfaced as a run `error` event, and the analyzer should show nothing.
 Report back (or file as a follow-up) anything in step 2 that needed
 adjusting — that feedback is exactly what turns this from "code complete,
 hardware-unverified" into "done."
+
+## M10 — AIR7311 adapter + live capability-based scheduling
+
+M10 has two independent parts. **The live-scheduling part was actually run
+and verified in this session** (it needs no special hardware — just the
+existing `docker compose` stack). **The AIR7311 hardware part was not** —
+same constraint as M9: no SoapySDR bindings, no physical AIR7311 here.
+
+### Part A — live capability-based scheduling (verified in this session)
+
+This proves `rogue.persistence.replay.compile_and_store_replay_plan` now
+schedules against the live agent registry (M8's `GET /agents`) instead of
+always the static `DEFAULT_CAPABILITY_PROFILE`, once at least one Agent is
+online.
+
+**1. Bring up the full stack** (same as the M8 section):
+
+```bash
+docker compose up -d --build postgres nats minio minio-init api simulated-agent-1 simulated-agent-2
+sleep 6
+curl -s http://localhost:8000/agents | python3 -c "
+import sys, json
+for a in json.load(sys.stdin):
+    print(a['agent_id'], a['status'], len(a['capabilities']))
+"
+```
+
+Expect both `sim-agent-01`/`sim-agent-02` `online` with 12 capabilities
+each.
+
+**2. Register a recording and publish a scenario version** (same pattern
+as M6/M8/M9's sections — a scenario, one recording, one RF link at
+2.412 GHz), then **compile without an explicit `capability_profile`**:
+
+```bash
+PLAN=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/versions/$VERSION_NUMBER/compile \
+  -H "Content-Type: application/json" -d '{"duration_s": 20.0}')
+echo "$PLAN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print('capability_profile.id =', d['capability_profile']['id'])
+print('allocations =', d['allocations'])
+"
+```
+
+Expect `capability_profile.id = live-agent-registry` (not
+`default-initial-planning-profile`) and the allocation landing on one of
+the running Agents' real device_ids (`x440-1`, in this compose setup).
+This is exactly what was run to confirm M10's live-scheduling piece — the
+output above is real, not illustrative.
+
+**3. Confirm the fallback still works.** Stop both agent containers, wait
+past their presence-staleness window, and compile again:
+
+```bash
+docker compose stop simulated-agent-1 simulated-agent-2
+sleep 20
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/versions/$VERSION_NUMBER/compile \
+  -H "Content-Type: application/json" -d '{"duration_s": 20.0}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['capability_profile']['id'])"
+```
+
+Expect `default-initial-planning-profile` — the static default, since no
+agent is online.
+
+### Part B — DeepwaveAIR7311Adapter (lab hardware required, unverified here)
+
+Same shape as the M9 X440 section, adjusted for SoapySDR:
+
+**1. Install SoapySDR on the Agent host** (bare-metal — ADR-004). Unlike
+`uhd`, there's no reliable `pip install .[air7311]` — SoapySDR's Python
+bindings come from the system package (`apt install python3-soapysdr`
+on Debian/Ubuntu, or build from
+[github.com/pothosware/SoapySDR](https://github.com/pothosware/SoapySDR)
+if your distro doesn't package it):
+
+```bash
+python -c "import SoapySDR; print(SoapySDR.__file__)"
+SoapySDRUtil --find
+```
+
+If either fails, fix the SoapySDR installation before continuing.
+
+**2. Confirm `_open_real_soapy_device`'s API calls against your installed
+version.** `agents/common/air7311_adapter.py`'s module docstring and
+ADR-010 both flag this: the exact call shape (`SoapySDR.Device`,
+`setFrequency`/`setSampleRate`/`setBandwidth`/`setGain`,
+`setupStream`/`activateStream`/`writeStream`) was written against
+SoapySDR's documented API, not exercised against a real install:
+
+```python
+import SoapySDR
+from SoapySDR import SOAPY_SDR_TX
+device = SoapySDR.Device("<your AIR7311's device args>")
+print(device.getNumChannels(SOAPY_SDR_TX))
+print(device.getFrequencyRange(SOAPY_SDR_TX, 0))
+```
+
+Adjust `agents/common/air7311_adapter.py` if anything doesn't match, then
+re-run `pytest tests/unit/agents/test_air7311_adapter.py`.
+
+**3. Cabled/attenuated setup — same safety note as M9.** AIR7311 TX port →
+fixed attenuator → spectrum analyzer or receiving SDR. Confirm your
+attenuation budget before enabling TX.
+
+**4. Start the Agent in `air7311` mode** on the machine connected to the
+AIR7311:
+
+```bash
+ROGUE_AGENT_ID=air7311-lab-01 \
+ROGUE_AGENT_MODE=air7311 \
+ROGUE_AGENT_DEVICE_IDS=air7311-1 \
+ROGUE_AIR7311_DEVICE_ARGS="<your AIR7311's device args>" \
+ROGUE_ENABLE_REAL_TX=1 \
+ROGUE_NATS_URL=nats://<control-server-lab-address>:4222 \
+ROGUE_S3_ENDPOINT=http://<control-server-lab-address>:9000 \
+ROGUE_S3_ACCESS_KEY=rogue ROGUE_S3_SECRET_KEY=rogue_dev_password \
+python -m agents.common.main
+```
+
+**5. Compile, create+arm+start a run** exactly as in the M8/M9 sections,
+watching the spectrum analyzer for the expected signal, then confirm
+`stop`/`emergency-stop` actually cease transmission and that the real-TX
+gate refuses `start` with `ROGUE_ENABLE_REAL_TX` unset — same checks as
+M9, on the AIR7311 path this time.
+
+Report back anything in step 2 that needed adjusting.
 
 ## Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`)
 

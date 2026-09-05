@@ -175,5 +175,11 @@ yet defined here.
 - **Bare-metal host provisioning** (manual setup, a configuration
   management tool, or a install script) is not yet decided.
 - **Vendor driver installation** on Agent hosts (UHD for Ettus, the
-  Deepwave SDK) is bare-metal-host software, outside what ROGUE's own
-  packaging manages — tracked against M9/M10, not resolved here.
+  Deepwave SDK/SoapySDR) is bare-metal-host software, outside what ROGUE's
+  own packaging manages. M9/M10 (ADR-009/ADR-010) each added a real
+  adapter waiting on this: `uhd` is a real pip extra
+  (`pip install .[x440]`), but SoapySDR's Python bindings have no
+  equivalent reliable PyPI package — an AIR7311 host needs the system
+  SoapySDR package (apt) or a build from source, confirmed with
+  `SoapySDRUtil --find`. Neither adapter has been run against real
+  hardware yet — see the manual-verification-guide's M9/M10 sections.

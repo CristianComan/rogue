@@ -13,9 +13,12 @@ import pytest
 from persistence_factories import make_draft, make_mission, make_recording, make_scenario
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from rogue.compiler.models import PhysicalTxChannelCapability
 from rogue.db.models import IQRecordingORM
+from rogue.persistence import agents as agents_persistence
 from rogue.persistence import replay as replay_persistence
 from rogue.persistence import repository
+from rogue.protocol.messages import AgentPresence
 
 
 async def _publish_version(session: AsyncSession, **draft_overrides: object):
@@ -104,3 +107,80 @@ async def test_get_replay_plan_missing_returns_none(session: AsyncSession) -> No
     scenario = await repository.create_scenario(session, make_scenario())
 
     assert await replay_persistence.get_replay_plan(session, scenario.id, uuid4()) is None
+
+
+# --- live capability-based scheduling (M10, ADR-010) ---
+
+
+async def test_compile_with_no_online_agents_falls_back_to_the_static_default(
+    session: AsyncSession,
+) -> None:
+    recording = make_recording(sample_rate_hz=2_000_000.0, duration_s=100.0)
+    session.add(
+        IQRecordingORM(
+            id=recording.id,
+            version=recording.version,
+            document=recording.model_dump(mode="json"),
+            access_classification=recording.access_classification.value,
+            provenance=None,
+            created_at=datetime.now(UTC),
+        )
+    )
+    await session.flush()
+    ref = recording.reference()
+    scenario, version = await _publish_version(
+        session, missions=[make_mission(ref)], recordings=[ref]
+    )
+
+    plan = await replay_persistence.compile_and_store_replay_plan(
+        session, scenario.id, version.version_number, duration_s=20.0
+    )
+
+    assert plan.capability_profile.id == "default-initial-planning-profile"
+    assert plan.allocations[0].device_id == "x440-1"
+
+
+async def test_compile_with_an_online_agent_uses_its_live_capabilities(
+    session: AsyncSession,
+) -> None:
+    recording = make_recording(sample_rate_hz=2_000_000.0, duration_s=100.0)
+    session.add(
+        IQRecordingORM(
+            id=recording.id,
+            version=recording.version,
+            document=recording.model_dump(mode="json"),
+            access_classification=recording.access_classification.value,
+            provenance=None,
+            created_at=datetime.now(UTC),
+        )
+    )
+    await session.flush()
+    ref = recording.reference()
+    scenario, version = await _publish_version(
+        session, missions=[make_mission(ref)], recordings=[ref]
+    )
+    await agents_persistence.record_presence(
+        session,
+        AgentPresence(
+            agent_id="live-lab-agent",
+            mode="x440",
+            capabilities=[
+                PhysicalTxChannelCapability(
+                    device_id="custom-live-1",
+                    channel_index=0,
+                    device_family="x440",
+                    tunable_ranges_hz=[(1e6, 6e9)],
+                    max_usable_bandwidth_hz=400e6,
+                    max_sample_rate_hz=500e6,
+                )
+            ],
+            seen_at=datetime.now(UTC),
+        ),
+    )
+
+    plan = await replay_persistence.compile_and_store_replay_plan(
+        session, scenario.id, version.version_number, duration_s=20.0
+    )
+
+    assert plan.capability_profile.id == "live-agent-registry"
+    assert plan.allocations[0].device_id == "custom-live-1"

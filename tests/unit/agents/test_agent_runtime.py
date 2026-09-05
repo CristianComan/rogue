@@ -13,6 +13,7 @@ from uuid import uuid4
 import pytest
 from agents.common import cache
 from agents.common.agent import AgentRuntime, UnknownAgentModeError, _ChannelContact
+from agents.common.air7311_adapter import DeepwaveAIR7311Adapter
 from agents.common.x440_adapter import ChannelCapabilityReadback, ChannelConfig, EttusX440Adapter
 
 from rogue.compiler.models import RfWindow
@@ -193,6 +194,16 @@ def test_x440_mode_builds_ettus_adapter_with_the_injected_device(tmp_path: Path)
     )
 
     assert isinstance(runtime.adapter, EttusX440Adapter)
+
+
+def test_air7311_mode_builds_deepwave_adapter_with_the_injected_device(tmp_path: Path) -> None:
+    device = _FakeUHDDevice()  # same shape as SoapyDevice — RealDeviceSeam is identical
+
+    runtime = AgentRuntime(
+        agent_id="a", capabilities=[], cache_dir=tmp_path, mode="air7311", air7311_device=device
+    )
+
+    assert isinstance(runtime.adapter, DeepwaveAIR7311Adapter)
 
 
 def test_unknown_mode_raises(tmp_path: Path) -> None:

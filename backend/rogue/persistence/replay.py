@@ -27,6 +27,7 @@ from rogue.compiler.models import DEFAULT_CAPABILITY_PROFILE, HardwareCapability
 from rogue.db.models import ReplayPlanORM
 from rogue.domain.recording import IQRecording
 from rogue.domain.validation import ValidationSeverity
+from rogue.persistence import agents as agents_persistence
 from rogue.persistence import catalogue, repository
 from rogue.persistence.repository import CompilationRejectedError, NotFoundError
 from rogue.spectrum.occupancy import RecordingKey
@@ -48,8 +49,12 @@ async def compile_and_store_replay_plan(
 
     Raises ``NotFoundError`` if the version doesn't exist,
     ``CompilationRejectedError`` (carrying the findings) if compilation is
-    rejected. ``capability_profile`` defaults to
-    ``rogue.compiler.models.DEFAULT_CAPABILITY_PROFILE`` when omitted.
+    rejected. ``capability_profile`` omitted (M10, ADR-010): uses the live
+    agent registry's aggregate profile (``rogue.persistence.agents.
+    aggregate_capability_profile``) when at least one Agent is currently
+    online, falling back to ``rogue.compiler.models.
+    DEFAULT_CAPABILITY_PROFILE`` only when none is — CLAUDE.md rule 10's
+    "static profiles are defaults only," not the only thing ever used.
     """
     version = await repository.get_version(session, scenario_id, version_number)
     if version is None:
@@ -68,7 +73,11 @@ async def compile_and_store_replay_plan(
         if recording is not None:
             recordings[(recording_id, recording_version)] = recording
 
-    profile = capability_profile if capability_profile is not None else DEFAULT_CAPABILITY_PROFILE
+    if capability_profile is not None:
+        profile = capability_profile
+    else:
+        live_profile = await agents_persistence.aggregate_capability_profile(session)
+        profile = live_profile or DEFAULT_CAPABILITY_PROFILE
     plan = compile_replay_plan(version, recordings, duration_s, profile)
 
     if any(f.severity == ValidationSeverity.BLOCKING for f in plan.findings):
