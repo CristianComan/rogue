@@ -5,6 +5,7 @@ real NATS broker — commands are fed directly into ``_dispatch``/``_handle``.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -209,3 +210,45 @@ def test_air7311_mode_builds_deepwave_adapter_with_the_injected_device(tmp_path:
 def test_unknown_mode_raises(tmp_path: Path) -> None:
     with pytest.raises(UnknownAgentModeError):
         AgentRuntime(agent_id="a", capabilities=[], cache_dir=tmp_path, mode="not-a-real-mode")
+
+
+# --- discover()-at-startup (found while planning a real AIR7311 connection) ---
+
+
+class _NoMessages:
+    def __aiter__(self) -> _NoMessages:
+        return self
+
+    async def __anext__(self) -> None:
+        raise StopAsyncIteration
+
+
+class _FakeSubscription:
+    messages = _NoMessages()
+
+    async def unsubscribe(self) -> None:
+        pass
+
+
+class _FakeNATSForRun:
+    async def subscribe(self, subject: str) -> _FakeSubscription:
+        return _FakeSubscription()
+
+    async def publish(self, subject: str, payload: bytes) -> None:
+        pass
+
+
+async def test_run_refreshes_capabilities_from_discover_before_first_presence(
+    tmp_path: Path,
+) -> None:
+    device = _FakeUHDDevice()  # reports 1 channel, unlike the constructor's empty list
+    runtime = AgentRuntime(
+        agent_id="a", capabilities=[], cache_dir=tmp_path, mode="x440", x440_device=device
+    )
+    stop = asyncio.Event()
+    stop.set()  # run() should refresh capabilities, then return immediately
+
+    await runtime.run(_FakeNATSForRun(), stop)  # type: ignore[arg-type]
+
+    assert len(runtime.capabilities) == 1
+    assert runtime.capabilities[0].max_usable_bandwidth_hz == 400e6

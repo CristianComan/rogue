@@ -250,6 +250,14 @@ class AgentRuntime:
 
     async def run(self, nc: NATSClient, stop: asyncio.Event) -> None:
         """Runs until `stop` is set."""
+        # Refresh from the adapter's own discover() before the first presence
+        # publish — CLAUDE.md rule 10: runtime discovery is authoritative, not
+        # whatever static slice main.py constructed this runtime with. A no-op
+        # for MockSDRAdapter (discover() just echoes back what it was given);
+        # for a real adapter this replaces illustrative defaults with the
+        # hardware's actual reported ranges. Left as the constructor-supplied
+        # value if discover() comes back empty, rather than wiping to nothing.
+        self.capabilities = await self.adapter.discover() or self.capabilities
         subscription = await nc.subscribe(agent_command_subject(self.agent_id))
         tasks = [
             asyncio.create_task(self._command_loop(subscription)),

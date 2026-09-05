@@ -97,3 +97,31 @@ later" as M9.
   `x440_adapter.py`) despite the internal refactor onto
   `StreamingSDRAdapter` — existing imports/tests needed no changes beyond
   what M10's own additions required.
+
+## Addendum: real AIR7311 hardware, and a discover()-at-startup fix
+
+While planning an actual connection to a physical AIR7311 (a Deepwave
+AIR-T unit — the RF front end is directly attached to an embedded NVIDIA
+Jetson/Orin module, which *is* the Agent host per ADR-004, not a separate
+PC), `SoapySDRUtil --find` against real hardware confirmed:
+
+```
+driver = SoapyAIRT
+hardware = AIR7311
+serial = 31068155
+```
+
+i.e. `ROGUE_AIR7311_DEVICE_ARGS="driver=SoapyAIRT"` is the real, confirmed
+device-args string — not a placeholder — and the device enumerates two
+daughtercards, matching the 4-TX-channel profile.
+
+Separately, this surfaced a real gap: `agents/common/main.py` built
+`AgentRuntime`'s `capabilities` once from `DEFAULT_CAPABILITY_PROFILE`'s
+static numbers (filtered by `ROGUE_AGENT_DEVICE_IDS`) and never called
+`adapter.discover()` — so a real adapter's presence heartbeat, and
+therefore M10's own live-capability-scheduling, would have reported
+fabricated illustrative numbers instead of the AIR7311's actual ranges.
+Fixed in `AgentRuntime.run()`: capabilities are refreshed from
+`self.adapter.discover()` before the first presence publish (a no-op for
+`MockSDRAdapter`, which just echoes back what it was already given).
+

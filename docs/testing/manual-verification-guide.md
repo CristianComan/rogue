@@ -1214,34 +1214,47 @@ agent is online.
 
 ### Part B — DeepwaveAIR7311Adapter (lab hardware required, unverified here)
 
-Same shape as the M9 X440 section, adjusted for SoapySDR:
+The AIR7311 is a Deepwave AIR-T unit: the RF front end is directly attached
+to an embedded NVIDIA Jetson/Orin compute module, which **is** the Agent
+host (ADR-004) — there is no separate PC in between. SoapySDR runs locally
+on that Orin, and only ROGUE's own NATS/S3 traffic crosses the Ethernet
+link to the control plane (ADR-005: no vendor-library remoting).
 
-**1. Install SoapySDR on the Agent host** (bare-metal — ADR-004). Unlike
-`uhd`, there's no reliable `pip install .[air7311]` — SoapySDR's Python
-bindings come from the system package (`apt install python3-soapysdr`
-on Debian/Ubuntu, or build from
-[github.com/pothosware/SoapySDR](https://github.com/pothosware/SoapySDR)
-if your distro doesn't package it):
+**1. Confirm SoapySDR sees the device** (already shipped on the AIR-T's
+`airstack` OS image — no separate install needed on Deepwave-provided
+units):
 
 ```bash
-python -c "import SoapySDR; print(SoapySDR.__file__)"
 SoapySDRUtil --find
 ```
 
-If either fails, fix the SoapySDR installation before continuing.
+Confirmed output on a real unit:
+
+```
+Found device 0
+  driver = SoapyAIRT
+  hardware = AIR7311
+  serial = 31068155
+  ...
+```
+
+`driver = SoapyAIRT` is the key line — that's the exact driver name to use
+in `ROGUE_AIR7311_DEVICE_ARGS` below, not a generic placeholder. If more
+than one AIRT unit could ever be on the same network/host, disambiguate
+with `driver=SoapyAIRT,serial=<serial>`.
 
 **2. Confirm `_open_real_soapy_device`'s API calls against your installed
-version.** `agents/common/air7311_adapter.py`'s module docstring and
-ADR-010 both flag this: the exact call shape (`SoapySDR.Device`,
-`setFrequency`/`setSampleRate`/`setBandwidth`/`setGain`,
-`setupStream`/`activateStream`/`writeStream`) was written against
-SoapySDR's documented API, not exercised against a real install:
+SoapySDR/`airstack` version.** `agents/common/air7311_adapter.py`'s module
+docstring and ADR-010 both flag this: the exact call shape
+(`SoapySDR.Device`, `setFrequency`/`setSampleRate`/`setBandwidth`/
+`setGain`, `setupStream`/`activateStream`/`writeStream`) was written
+against SoapySDR's documented API, not exercised against a real install:
 
 ```python
 import SoapySDR
 from SoapySDR import SOAPY_SDR_TX
-device = SoapySDR.Device("<your AIR7311's device args>")
-print(device.getNumChannels(SOAPY_SDR_TX))
+device = SoapySDR.Device("driver=SoapyAIRT")
+print(device.getNumChannels(SOAPY_SDR_TX))       # expect 4 (2 channels x 2 daughtercards)
 print(device.getFrequencyRange(SOAPY_SDR_TX, 0))
 ```
 
@@ -1250,25 +1263,42 @@ re-run `pytest tests/unit/agents/test_air7311_adapter.py`.
 
 **3. Cabled/attenuated setup — same safety note as M9.** AIR7311 TX port →
 fixed attenuator → spectrum analyzer or receiving SDR. Confirm your
-attenuation budget before enabling TX.
+attenuation budget before enabling TX. **Start with
+`ROGUE_ENABLE_REAL_TX=0`** and confirm presence/`discover()`/`configure`
+work before ever setting it to `1`.
 
-**4. Start the Agent in `air7311` mode** on the machine connected to the
-AIR7311:
+**4. Start the Agent in `air7311` mode** directly on the Orin (same
+network as the control-plane host — confirm with `ifconfig`/`ip addr` that
+its Ethernet interface, e.g. `eth0`, is reachable from the control-plane
+host's IP on ports 4222/NATS and 9000/MinIO before starting):
 
 ```bash
-ROGUE_AGENT_ID=air7311-lab-01 \
+ROGUE_AGENT_ID=air7311-orin-01 \
 ROGUE_AGENT_MODE=air7311 \
 ROGUE_AGENT_DEVICE_IDS=air7311-1 \
-ROGUE_AIR7311_DEVICE_ARGS="<your AIR7311's device args>" \
-ROGUE_ENABLE_REAL_TX=1 \
-ROGUE_NATS_URL=nats://<control-server-lab-address>:4222 \
-ROGUE_S3_ENDPOINT=http://<control-server-lab-address>:9000 \
+ROGUE_AIR7311_DEVICE_ARGS="driver=SoapyAIRT" \
+ROGUE_ENABLE_REAL_TX=0 \
+ROGUE_NATS_URL=nats://<control-server-lab-ip>:4222 \
+ROGUE_S3_ENDPOINT=http://<control-server-lab-ip>:9000 \
 ROGUE_S3_ACCESS_KEY=rogue ROGUE_S3_SECRET_KEY=rogue_dev_password \
 python -m agents.common.main
 ```
 
-**5. Compile, create+arm+start a run** exactly as in the M8/M9 sections,
-watching the spectrum analyzer for the expected signal, then confirm
+**5. Confirm real discovered capabilities show up in the registry.** Once
+the Orin's Agent process connects, `GET /agents` should show
+`air7311-orin-01` online with capabilities read back from the real device
+via `discover()` (`agents/common/agent.py`'s `AgentRuntime.run()` refreshes
+from the adapter before its first presence publish) — not the illustrative
+static defaults. Confirm the reported `tunable_ranges_hz`/
+`max_usable_bandwidth_hz` look like real AIR7311 numbers, not
+`[[70000000.0, 6000000000.0]]`/`100000000.0` (the static profile's
+placeholder values) coincidentally.
+
+**6. Compile, create+arm+start a run** exactly as in the M8/M9 sections
+(compiling with no explicit `capability_profile` will now schedule against
+this real, live-discovered AIR7311 per M10 — confirm
+`capability_profile.id == "live-agent-registry"` in the compiled plan).
+Watch the spectrum analyzer for the expected signal, then confirm
 `stop`/`emergency-stop` actually cease transmission and that the real-TX
 gate refuses `start` with `ROGUE_ENABLE_REAL_TX` unset — same checks as
 M9, on the AIR7311 path this time.

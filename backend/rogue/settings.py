@@ -46,7 +46,10 @@ class Settings(BaseSettings):
     # targets (e.g. "addr=192.168.10.2").
     x440_device_args: str | None = None
     # SoapySDR device args string for the one AIR7311 an air7311-mode
-    # Agent host targets (M10, ADR-010).
+    # Agent host targets (M10, ADR-010) — a real Deepwave AIR-T unit's
+    # SoapySDR driver identifies itself as "driver=SoapyAIRT" (confirmed via
+    # `SoapySDRUtil --find` against physical hardware, see ADR-010's
+    # addendum), not a generic/vendor-neutral string.
     air7311_device_args: str | None = None
 
     @field_validator("cors_allowed_origins", mode="before")
