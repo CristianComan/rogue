@@ -65,6 +65,19 @@ class CompositeChannel(FrozenRogueModel):
     gain_offset_db: float
     recording: RecordingReference
 
+    # Coherent-group fields (ADR-012), carried through from the matching
+    # OccupiedBand by rogue.compiler.windows's expansion step. None for an
+    # ordinary (non-coherent) channel. phase_offset_rad is set only for
+    # AOA_DOA members (TDOA elements have no element_local_offset_m to
+    # project a phase from — delay_offset_s alone is meaningful for them).
+    # Computed once per RfWindow span at the span's start_seconds — a
+    # piecewise-constant approximation, not a continuous per-sample
+    # schedule (see rogue.compiler.coherent_groups's module docstring).
+    coherent_group_id: UUID | None = None
+    array_element_receiver_id: UUID | None = None
+    phase_offset_rad: float | None = None
+    delay_offset_s: float | None = None
+
 
 class RfWindow(FrozenRogueModel):
     """A contiguous wideband RF canvas (ADR-003), valid for [start, end) seconds.
@@ -120,9 +133,7 @@ class SafetyPolicyOutcome(FrozenRogueModel):
     """
 
     tx_authorized: bool = False
-    notes: str | None = (
-        "TX authorization is granted at run preparation (M8), not at compile time"
-    )
+    notes: str | None = "TX authorization is granted at run preparation (M8), not at compile time"
 
 
 class CompilerFinding(FrozenRogueModel):

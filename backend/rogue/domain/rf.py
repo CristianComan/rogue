@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from enum import StrEnum
+from uuid import UUID
 
 from pydantic import Field, field_validator, model_validator
 
@@ -181,6 +182,15 @@ class DroneRfLink(IdentifiedMixin):
     frequency_behaviour: FrequencyBehaviour
     emissions: list[RfEmission] = Field(default_factory=list)
     resource_preference: ResourcePreference | None = None
+
+    # Declares that this link's emission must be coherently synthesized
+    # (matching Δφ/τ per rf-model.md section 6) across every Receiver
+    # sharing this array_group_id — i.e. Receiver.array_group_id, not a new
+    # identifier space. Reference-integrity (the group must resolve to >=2
+    # TDOA/AOA_DOA receivers) is a cross-entity concern, checked by
+    # rogue.domain.validation.validate_scenario_version, not here — this
+    # field alone doesn't know the scenario's receivers.
+    array_group_id: UUID | None = None
 
     @field_validator("emissions")
     @classmethod

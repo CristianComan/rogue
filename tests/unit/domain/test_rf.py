@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from uuid import uuid4
 
 import pytest
 from factories import drone_rf_link_kwargs, rf_band_kwargs
@@ -61,6 +62,18 @@ def test_valid_drone_rf_link_round_trips() -> None:
     restored = DroneRfLink.model_validate(dumped)
     assert restored.role == link.role
     assert len(restored.emissions) == 1
+
+
+def test_array_group_id_defaults_to_none() -> None:
+    link = DroneRfLink(**drone_rf_link_kwargs())
+    assert link.array_group_id is None
+
+
+def test_array_group_id_round_trips() -> None:
+    group_id = uuid4()
+    link = DroneRfLink(**drone_rf_link_kwargs(array_group_id=group_id))
+    restored = DroneRfLink.model_validate(link.model_dump(mode="json"))
+    assert restored.array_group_id == group_id
 
 
 def test_silence_emission_requires_explicit_duration() -> None:

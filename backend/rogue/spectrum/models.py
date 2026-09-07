@@ -52,6 +52,17 @@ class OccupiedBand(FrozenRogueModel):
     headroom_hz: float
     recording: RecordingReference
 
+    # Coherent-group fields (ADR-012): always None as produced by
+    # compute_spectrum_state below — M5 has no receiver-geometry awareness.
+    # Populated only by rogue.compiler.windows's coherent-group expansion
+    # step (M6), one band per target Receiver array element, before
+    # _pack_bands runs — same "M6-forward-looking field on an M5 model"
+    # precedent as this class's own `recording` field (see its docstring).
+    coherent_group_id: UUID | None = None
+    array_element_receiver_id: UUID | None = None
+    phase_offset_rad: float | None = None
+    delay_offset_s: float | None = None
+
 
 class SpectrumFinding(FrozenRogueModel):
     """A single spectrum-planning result, scoped to a JSON-pointer-like path."""

@@ -27,6 +27,7 @@ from rogue.domain.mission import (
     Trajectory,
     Waypoint,
 )
+from rogue.domain.receiver import Receiver, ReceiverType
 from rogue.domain.recording import AccessClassification, IQRecording, RecordingReference
 from rogue.domain.rf import (
     DroneRfLink,
@@ -70,6 +71,7 @@ def make_link(
     mode: FrequencySwitchingMode = FrequencySwitchingMode.SCRIPTED,
     band: RfBand | None = None,
     emissions: list[RfEmission] | None = None,
+    array_group_id: UUID | None = None,
     **behaviour_overrides: Any,
 ) -> DroneRfLink:
     behaviour_kwargs: dict[str, Any] = {"mode": mode}
@@ -96,10 +98,40 @@ def make_link(
         band=band or RfBand(freq_min_hz=2_400_000_000.0, freq_max_hz=2_483_500_000.0),
         frequency_behaviour=FrequencyBehaviour(**behaviour_kwargs),
         emissions=emissions or [RfEmission(recording=recording_ref, start_offset=timedelta(0))],
+        array_group_id=array_group_id,
     )
 
 
-def make_mission(rf_links: list[DroneRfLink]) -> DroneMission:
+def make_receiver(
+    receiver_type: ReceiverType,
+    *,
+    lon: float = 13.42,
+    lat: float = 52.50,
+    array_group_id: UUID | None = None,
+    element_index: int | None = None,
+    element_local_offset_m: tuple[float, float, float] | None = None,
+    **overrides: Any,
+) -> Receiver:
+    """A single TDOA/AOA_DOA array element (or MONITOR receiver)."""
+    kwargs: dict[str, Any] = {
+        "name": f"rx-{receiver_type.value}",
+        "receiver_type": receiver_type,
+        "position": GeoPoint(coordinates=(lon, lat)),
+        "element_index": element_index,
+    }
+    if receiver_type in (ReceiverType.TDOA, ReceiverType.AOA_DOA):
+        kwargs["array_group_id"] = array_group_id or uuid4()
+    if receiver_type == ReceiverType.AOA_DOA:
+        kwargs["element_local_offset_m"] = element_local_offset_m or (0.0, 0.0, 0.0)
+    elif element_local_offset_m is not None:
+        kwargs["element_local_offset_m"] = element_local_offset_m
+    kwargs.update(overrides)
+    return Receiver(**kwargs)
+
+
+def make_mission(
+    rf_links: list[DroneRfLink], *, waypoints: list[Waypoint] | None = None
+) -> DroneMission:
     return DroneMission(
         name="recon-1",
         platform=Platform(
@@ -107,7 +139,8 @@ def make_mission(rf_links: list[DroneRfLink]) -> DroneMission:
         ),
         trajectory=Trajectory(
             template=MissionTemplate.WAYPOINT_TRANSIT,
-            waypoints=[
+            waypoints=waypoints
+            or [
                 Waypoint(
                     sequence_index=0,
                     position=GeoPoint(coordinates=(13.40, 52.20)),
@@ -128,13 +161,17 @@ def make_mission(rf_links: list[DroneRfLink]) -> DroneMission:
 
 
 def make_scenario_version(
-    missions: list[DroneMission], recordings: list[RecordingReference]
+    missions: list[DroneMission],
+    recordings: list[RecordingReference],
+    *,
+    receivers: list[Receiver] | None = None,
 ) -> ScenarioVersion:
     return ScenarioVersion(
         id=uuid4(),
         scenario_id=uuid4(),
         version_number=1,
         missions=missions,
+        receivers=receivers or [],
         recordings=recordings,
         author="test-operator",
     )
