@@ -53,7 +53,12 @@ export function ScenarioLibraryPage() {
 
   return (
     <div style={{ padding: 16, maxWidth: 800, margin: "0 auto" }}>
-      <h1>ROGUE Scenarios</h1>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <h1 style={{ margin: 0 }}>ROGUE Scenarios</h1>
+        <button type="button" onClick={() => navigate("/agents")} style={{ marginLeft: "auto" }}>
+          SDR Console
+        </button>
+      </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <input
           placeholder="Owner"
@@ -104,6 +109,9 @@ export function ScenarioLibraryPage() {
                 </button>
                 <button type="button" onClick={() => setCloningId(s.id)}>
                   Clone
+                </button>
+                <button type="button" onClick={() => navigate(`/scenarios/${s.id}/replay`)}>
+                  Replay
                 </button>
               </td>
             </tr>

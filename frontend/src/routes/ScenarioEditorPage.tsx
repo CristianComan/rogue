@@ -14,7 +14,6 @@ import { EditorLayout } from "../components/editor/EditorLayout";
 import { PublishBlockedDialog } from "../components/editor/PublishBlockedDialog";
 import { ScenarioToolbar } from "../components/editor/ScenarioToolbar";
 import { ValidationFindingsPanel } from "../components/editor/ValidationFindingsPanel";
-import { TimelinePane } from "../components/timeline/TimelinePane";
 import { scenarioDurationSeconds } from "../domain/missionEvaluator";
 import type { ValidationFinding } from "../domain/types";
 import {
@@ -152,6 +151,15 @@ export function ScenarioEditorPage() {
               ← Library
             </button>
             <strong>ROGUE Scenario Editor</strong>
+            {scenarioId && (
+              <button
+                type="button"
+                onClick={() => navigate(`/scenarios/${scenarioId}/replay`)}
+                style={{ marginLeft: "auto" }}
+              >
+                Replay →
+              </button>
+            )}
             {loadError && <span style={{ color: "crimson" }}>{loadError}</span>}
           </div>
           <div style={{ flex: 1, minHeight: 0 }}>
@@ -237,6 +245,7 @@ function EditorBody({
     <EditorLayout
       content={state.content}
       scenarioTimeSeconds={scenarioTimeSeconds}
+      maxSeconds={maxSeconds}
       dispatch={dispatch}
       toolbar={
         state.draftId && (
@@ -263,7 +272,6 @@ function EditorBody({
           </div>
         )
       }
-      timeline={<TimelinePane missions={state.content.missions} maxSeconds={maxSeconds} />}
     />
   );
 }
