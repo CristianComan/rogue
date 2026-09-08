@@ -1,28 +1,110 @@
-# Checking ROGUE yourself — manual verification guide (M0–M10)
+# Checking ROGUE yourself — manual verification guide (M0–M10, M11–M13 partial)
 
-A hands-on walkthrough for verifying what's been built so far, milestone by
-milestone, without having to read the code. Everything is copy/paste — run
-each block in a terminal from the repo root
+A hands-on walkthrough for verifying what's been built, without having to
+read the code. Run each block from the repo root
 (`/home/cristian/Programming/python/26.IC/rogue`).
 
-| Milestone | What it is | Verify by |
-|---|---|---|
-| M0 | Repo/CI shell, health endpoint | `curl` + a test |
-| M1 | Scenario domain model (typed schema, no server) | a Python script |
-| M2 | Scenario persistence/API | `curl` against a running server |
-| M3 | Map + trajectory editor | clicking around a browser UI |
-| M4 | SigMF recording catalogue | `curl` against a running server |
-| M5 | RF spectrum planner | `curl` against a running server |
-| — | Recording schedule + spectrum waterfall (supplemental) | `curl` + a browser UI |
-| M6 | Replay Plan compiler | `curl` against a running server |
-| M7 | Simulated SDR execution | `curl` against a running server |
-| — | Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`) | run the script, then `curl`/`psql` |
-| M8 | Distributed SDR Agent | full `docker compose up` + `curl`, killing a container mid-run |
-| M9 | First real adapter (X440) | **lab hardware required — not runnable in a dev sandbox** |
-| M10 | AIR7311 adapter + live capability scheduling | **lab hardware required** for AIR7311; live-scheduling check is runnable in software |
+**This guide was trimmed on 2026-09-08** — it had grown past 1400 lines and
+several numbers (test counts, source-file counts) had drifted out of date as
+milestones were added. If you're just trying to run the app, start with
+**Quick start** below and stop there; the rest is milestone-by-milestone
+verification detail for when you need to check a specific piece.
 
-Each section is independent — jump to whichever milestone you want to check.
-Section 0 is shared setup everything else depends on.
+## Quick start: start, use, stop
+
+**Start everything** (builds images the first time; add `--build` again
+after pulling code changes):
+
+```bash
+docker compose up -d --build
+```
+
+This brings up Postgres, MinIO (+ its one-shot bucket-creation job), NATS,
+the FastAPI backend, two simulated SDR Agents, the self-hosted map tiles
+service, and the Vite frontend — the whole application, containerized.
+Confirm it's actually healthy, not just started:
+
+```bash
+docker compose ps
+```
+
+`postgres`/`nats` should show `healthy`; `minio-init` should show `Exited
+(0)` (it's a one-shot job — that's success, not a crash); everything else
+`Up`. Then confirm the two layers that matter most:
+
+```bash
+curl -s http://localhost:8000/health          # backend: {"status":"ok","service":"rogue-api"}
+curl -s http://localhost:8000/agents | python3 -c "
+import sys, json
+for a in json.load(sys.stdin): print(a['agent_id'], a['status'], len(a['capabilities']), 'channels')
+"                                              # expect sim-agent-01/02, both 'online', 12 channels each
+```
+
+**Use it:** open **http://localhost:5173** in a browser. That's the whole
+application:
+
+- **Scenario Library** (`/`) — create/clone/list scenarios.
+- **Scenario Development** (click **Edit** on a scenario) — the map,
+  Spatial Knowledge (zones/missions/waypoints/receivers + a Doppler
+  geometry sub-view), Signal Knowledge (RF links, spectrum preview,
+  waterfalls) and the shared timeline scrub. Save/Validate/Publish are real
+  calls to the backend, not local-only UI state.
+- **Replay** (**Replay →** from the editor, or **Replay** from the
+  library) — pick or compile a Replay Plan, create a run, and watch it:
+  live drone position on the map, a waterfall grid per physical TX
+  channel, the run's real watchdog/safety event feed, and Arm/Start/Stop/
+  Emergency-stop controls.
+- **SDR Console** (**SDR Console** from the library) — live inventory of
+  registered Agents/devices/channels, with a manual refresh ("test
+  connections").
+
+Or skip the UI and hit the API directly: **http://localhost:8000/docs**
+(interactive OpenAPI docs — every endpoint, "Try it out" fires a real
+request against your running stack).
+
+**Stop it:**
+
+```bash
+docker compose stop        # keeps all data (scenarios, recordings, runs) — pick this most of the time
+docker compose down        # same, but also removes the containers (not the data volumes)
+docker compose down -v     # full reset — also deletes Postgres/MinIO/NATS data. Everything you registered is gone.
+```
+
+**If you changed backend code and want a faster edit loop** than rebuilding
+the `api` image every time, run the backend locally instead and let the
+containers handle just the infra:
+
+```bash
+docker compose stop api                                  # free port 8000
+source .venv/bin/activate
+alembic upgrade head                                      # once, or after a new migration
+uvicorn rogue.main:app --reload --app-dir backend          # local API, live-reloading
+```
+
+Same idea for the frontend — `docker compose stop ui` then `frontend/dev.sh`
+instead of the containerized `ui`. `docker compose up -d api` (or `ui`)
+hands the port back to the container when you're done.
+
+## What's actually implemented
+
+| Milestone | What it is | Status |
+|---|---|---|
+| M0 | Repo/CI shell, health endpoint | Done |
+| M1 | Scenario domain model | Done |
+| M2 | Scenario persistence & API | Done |
+| M3 | Map + trajectory editor | Done — now split into a dedicated Development page (Spatial/Signal/Timeline) |
+| M4 | SigMF recording catalogue | Done |
+| M5 | RF spectrum planner | Done |
+| M6 | Replay Plan compiler | Done |
+| M7 | Simulated SDR execution | Done |
+| M8 | Distributed SDR Agent | Done |
+| M9 | First real adapter (Ettus X440) | Code complete, **hardware-unverified** (ADR-009) |
+| M10 | X440 + AIR7311 capability-based scheduling | Live-scheduling: done. **AIR7311 hardware-verified 2026-09-08** (ADR-010, ADR-011). X440 hardware path still unverified. |
+| M11–M13 (partial) | Multi-SDR sync / Doppler-delay-phase / TDOA-AOA stimulation | **Domain + compiler slice only**: coherent-group RF window generation and atomic channel allocation (ADR-012). Execution-layer (grouped lease/arm/start) and continuous per-sample DSP application are not built. |
+
+Plus a UI overhaul (Replay page, SDR Console page, restructured Development
+page) and a Replay/SDR Console frontend layer sitting on top of the above —
+no new backend surface of its own.
 
 ## 0. One-time setup
 
@@ -31,382 +113,127 @@ cd /home/cristian/Programming/python/26.IC/rogue
 source .venv/bin/activate
 ```
 
-M2/M3/M4/M5/M6 need Postgres and MinIO (S3-compatible storage) running locally.
-M0/M1 don't need anything beyond the venv.
-
-### Starting the docker containers
-
-`docker-compose.yml` defines the whole stack:
-
-| Service | What it's for | Needed for this guide? |
-|---|---|---|
-| `postgres` | PostgreSQL/PostGIS — every persisted scenario/draft/version/recording/replay plan | Yes (M2+) |
-| `minio` | S3-compatible object storage — SigMF recording bytes | Yes (M4+) |
-| `minio-init` | One-shot job that creates the `rogue` bucket in MinIO, then exits | Yes (M4+, runs once) |
-| `nats` | JetStream message broker — SDR Agent command/telemetry protocol | Only for M8 |
-| `api` | The FastAPI backend, containerized | No, except for M8 — every other section runs it directly with `uvicorn --reload` instead for a faster edit/reload loop |
-| `ui` | The Vite frontend, containerized | No — this guide runs `frontend/dev.sh` directly instead, same reason |
-| `tiles` | Self-hosted MapLibre basemap tiles | Optional, M3 only — see that section |
-| `simulated-agent-1`, `simulated-agent-2` | Simulated SDR Agent processes (M8) | Only for M8 — that section runs the whole stack via `docker compose up`, not `uvicorn --reload` |
-
-For M0–M7 and the drone-corpus loader you only need `postgres`, `minio` and
-`minio-init` running (M8 needs the full stack — see that section). Check
-whether they already are:
+For anything below that talks to Postgres/MinIO directly (not through
+`docker compose up`, i.e. running the backend with local `uvicorn`), start
+just the infra services and apply migrations once:
 
 ```bash
-docker ps --filter "name=rogue-postgres" --filter "name=rogue-minio"
-```
-
-If that prints nothing, start them:
-
-```bash
-docker compose up -d postgres minio minio-init
-```
-
-(If `docker compose up` errors with `KeyError: 'ContainerConfig'`, the
-containers exist but are stale — find them with `docker ps -a --filter
-name=rogue` and start them by container ID instead, e.g. `docker start
-<postgres_id> <minio_id>`.)
-
-Confirm they're actually healthy, not just started:
-
-```bash
-docker compose ps
-```
-
-`postgres` and `minio` should show `Up`/`healthy`. `minio-init` should show
-`Exited (0)` — it's a one-shot job, not a long-running service, so "exited
-successfully" is what a healthy run looks like for it, not a failure.
-
-Two things you won't need for anything in this guide, but worth knowing
-about: bringing up the *entire* stack, including the containerized API/UI
-(e.g. to test the `docker compose build` path itself, not just local dev
-servers):
-
-```bash
-docker compose up -d
-```
-
-and tearing everything down:
-
-```bash
-docker compose down
-```
-
-Add `-v` to that last one only if you want a clean slate — it also deletes
-the Postgres/MinIO/NATS data volumes, i.e. every scenario/recording/replay
-plan you've registered.
-
-### Full containerized stack: two things that will trip you up
-
-**Running local `uvicorn`/`frontend/dev.sh` *and* the full stack at the same
-time.** `api` and `ui` bind the same host ports (`8000`/`5173`) their local
-dev-server equivalents use. If you `docker compose up -d` (the full stack)
-and then also try `uvicorn rogue.main:app --reload --app-dir backend`,
-you'll get `ERROR: [Errno 98] Address already in use` — that's the `api`
-container already holding port 8000, not a bug. Pick one:
-
-```bash
-docker compose stop api  # frees 8000 for local uvicorn; postgres/minio/etc. keep running
-```
-```bash
-docker compose up -d api  # or the reverse: give the port back to the container
-```
-
-**A stale local image after a Node or settings change.** The `ui` image is
-pinned to `frontend/Dockerfile`'s `FROM node:24-slim` — a maplibre-gl
-tooling dependency (`@mapbox/jsonlint-lines-primitives`) requires Node >=22,
-and `.npmrc`'s `engine-strict=true` makes `npm ci` hard-fail rather than
-warn on a mismatch, so if you ever see `EBADENGINE`/`Not compatible with
-your version of node` while building `ui`, that image predates the Node 24
-bump — `docker compose build ui` picks up the current Dockerfile. Similarly,
-if `api` crashes on startup with `pydantic_settings.exceptions.SettingsError`
-mentioning `cors_allowed_origins`, that image predates
-`backend/rogue/settings.py`'s `NoDecode` fix for comma-separated
-`ROGUE_CORS_ALLOWED_ORIGINS` values — `docker compose build api` picks up
-the fix. Check what actually crashed with:
-
-```bash
-docker compose logs api --tail 40
-```
-
-Then make sure the database schema is current:
-
-```bash
+docker compose up -d postgres minio minio-init nats
 alembic upgrade head
 ```
 
+**If you skip `alembic upgrade head` against a genuinely fresh Postgres
+volume, the persistence/API tests below will fail (schema doesn't exist
+yet) — this bites often enough to call out explicitly.**
+
+Two gotchas, still current:
+
+- **Port conflicts.** `api`/`ui` containers bind the same host ports
+  (8000/5173) their local dev-server equivalents use. Running both at once
+  gets you `[Errno 98] Address already in use` — `docker compose stop api`
+  (or `ui`) frees the port, `docker compose up -d api` gives it back.
+- **A stale local image** after a Node/dependency bump. If `docker compose
+  build ui` fails with `EBADENGINE`, or `api` crashes on startup with a
+  `pydantic_settings.exceptions.SettingsError`, that image predates a fix —
+  `docker compose build <service>` picks up the current Dockerfile/code.
+  Check what actually crashed with `docker compose logs api --tail 40`.
+
 ## Automated checks (covers all milestones)
 
-These are the same commands CI/review runs — one shot at everything:
+The same checks CI/review runs, against a **fresh** DB with no Agents ever
+registered against it (see the callout right after) — one shot at
+everything:
 
 ```bash
-ruff check backend tests
+ruff check backend tests agents
 ```
-Expect: `All checks passed!`
+Expect `All checks passed!`
 
 ```bash
-cd backend && mypy rogue && cd ..
+mypy backend/rogue && mypy agents
 ```
-Expect: `Success: no issues found in 57 source files`
+Expect `Success: no issues found in N source files` for each (71 and 8
+respectively as of 2026-09-08 — the exact number drifts as files are
+added; zero errors is the actual thing to check for).
 
 ```bash
 pytest tests/unit -q
 ```
-Expect: `254 passed`. (If Postgres isn't running, the persistence/API tests
-will error out with a connection-refused message — that's the DB, not a
-code problem; go back to section 0.)
+Expect **all passed, 0 failed** (358 as of 2026-09-08). If Postgres isn't
+running or migrations haven't been applied, the persistence/API tests
+error out instead of failing cleanly — that's section 0, not a code
+problem.
 
-To scope the test run to one milestone:
+**Known gotcha, worth knowing before you chase a false failure:** a handful
+of tests (`tests/unit/persistence/test_agent_registry.py`,
+`tests/unit/api/test_agents.py::test_list_agents_returns_seeded_presence`,
+`tests/unit/persistence/test_replay.py::
+test_compile_with_no_online_agents_falls_back_to_the_static_default`)
+assume the `sdr_agents` table is completely empty. They are **not**
+isolated from whatever Postgres instance you point them at — if you've
+ever run `docker compose up` with the simulated Agents against this same
+DB volume, their presence rows are still there (even stale ones still
+count as "an agent exists" for these specific tests) and these tests will
+fail. This is a real, pre-existing test-isolation gap, not something these
+docs can fully paper over — if you hit exactly these failures and nothing
+else, it's this, not a regression. Fix: run the test suite against a fresh
+DB (`docker compose down -v && docker compose up -d postgres minio
+minio-init nats && alembic upgrade head`) before ever starting a real or
+simulated Agent against it.
+
+To scope the run to one milestone:
 
 ```bash
-pytest tests/unit/test_health.py -v                                  # M0
-pytest tests/unit/domain -v                                          # M1
-pytest tests/unit/persistence/test_repository.py tests/unit/api/test_scenarios.py -v   # M2
+pytest tests/unit/test_health.py -v                                                          # M0
+pytest tests/unit/domain -v                                                                   # M1 + coherent-group domain additions
+pytest tests/unit/persistence/test_repository.py tests/unit/api/test_scenarios.py -v          # M2
 pytest tests/unit/catalogue tests/unit/persistence/test_catalogue.py tests/unit/api/test_recordings.py -v   # M4 + recording schedule/waterfall
 pytest tests/unit/spectrum tests/unit/persistence/test_spectrum.py tests/unit/api/test_spectrum_planner.py -v   # M5
-pytest tests/unit/domain/test_rf.py tests/unit/domain/test_recording.py tests/unit/domain/test_validation.py -v   # recording schedule/waterfall domain
-pytest tests/unit/compiler tests/unit/persistence/test_replay.py tests/unit/api/test_replay_compiler.py -v   # M6
+pytest tests/unit/compiler tests/unit/persistence/test_replay.py tests/unit/api/test_replay_compiler.py -v   # M6 + coherent-group compiler additions
 pytest tests/unit/domain/test_run.py tests/unit/execution tests/unit/persistence/test_run_execution.py tests/unit/api/test_runs.py -v   # M7
-```
-(M3 is a frontend feature — its checks are `npm run typecheck`, `npm test`
-and `npm run e2e` from `frontend/`, see the M3 section below.)
-
-The rest of this guide is about *seeing it work*, not just tests passing.
-
-## M0 — repository shell & health check
-
-Start the server:
-
-```bash
-uvicorn rogue.main:app --reload --app-dir backend
+pytest tests/unit/agents tests/unit/protocol tests/unit/persistence/test_agent_registry.py tests/unit/persistence/test_lease_sweep.py tests/unit/execution/test_remote_adapter.py tests/unit/execution/test_distributed_integration.py tests/unit/api/test_agents.py -v   # M8/M9/M10
+pytest tests/unit/domain/test_geometry.py tests/unit/domain/test_mission_evaluator.py tests/unit/compiler/test_coherent_groups.py -v   # M11-M13 (partial) new modules
 ```
 
-In another terminal:
-
-```bash
-curl -s http://localhost:8000/health -w "\nHTTP %{http_code}\n"
-```
-
-Expect `{"status":"ok","service":"rogue-api"}` and `HTTP 200`. That's the
-whole of M0's scope — a running process with a health check CI/Compose can
-poll. Leave the server running; every other section uses it.
-
-## M1 — scenario domain model
-
-M1 has no HTTP surface — it's the typed Pydantic schema everything else is
-built on (`backend/rogue/domain/`), proven by round-tripping the example
-scenario at `examples/scenarios/single-drone-orbit.yaml`. Run this with the
-venv active:
-
-```bash
-PYTHONPATH=backend python3 - <<'EOF'
-from rogue.domain.scenario import ScenarioVersion
-from rogue.domain.serialization import from_yaml, to_yaml, to_json
-from rogue.domain.validation import validate_scenario_version
-
-text = open("examples/scenarios/single-drone-orbit.yaml").read()
-version = from_yaml(ScenarioVersion, text)
-print("parsed:", version.scenario_id, "version", version.version_number)
-print("missions:", [m.name for m in version.missions])
-
-findings = validate_scenario_version(version)
-print("validation findings:", findings)
-
-restored = from_yaml(ScenarioVersion, to_yaml(version))
-print("round-trip equal:", restored == version)
-EOF
-```
-
-Expect: it parses, prints one mission (`recon-1`), an empty findings list
-(the fixture is valid), and `round-trip equal: True`. If you break the
-fixture on purpose (e.g. delete the `missions:` block) and rerun, you should
-see a `pydantic.ValidationError` instead — that's the schema doing its job.
-
-## M2 — scenario persistence & API
-
-With the server from M0 still running:
-
-```bash
-SCENARIO=$(curl -s -X POST http://localhost:8000/scenarios \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "manual-check scenario",
-    "owner": "manual-check",
-    "area_of_operation": {"type":"Polygon","coordinates":[[[13.0,52.0],[13.6,52.0],[13.6,52.6],[13.0,52.6],[13.0,52.0]]]}
-  }')
-echo "$SCENARIO" | python3 -m json.tool
-SCENARIO_ID=$(echo "$SCENARIO" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
-```
-
-Create a draft on it, validate it, and publish:
-
-```bash
-DRAFT=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts \
-  -H "Content-Type: application/json" -d '{"author":"manual-check"}')
-echo "$DRAFT" | python3 -m json.tool
-DRAFT_ID=$(echo "$DRAFT" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
-
-curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID/validate | python3 -m json.tool
-
-curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID/publish | python3 -m json.tool
-
-curl -s http://localhost:8000/scenarios/$SCENARIO_ID/versions/1 | python3 -m json.tool
-```
-
-Expect: the draft comes back with `"revision": 0` and empty
-missions/zones/receivers; `validate` returns one `"warning"`-severity
-`empty_scenario` finding (not blocking — an empty scenario is legal, just
-noteworthy); `publish` returns `version_number: 1` carrying that same
-finding; and `GET .../versions/1` returns the identical, now-immutable
-version. This is the same scenario the M3 section below opens in the UI.
-
-## M3 — map + trajectory editor
-
-This is a frontend feature — you click through a browser instead of curling.
-
-### Basemap: self-hosted map tiles (one-time, optional but recommended)
-
-The map needs a basemap style to show roads/streets under the scenario's own
-zones/tracks/waypoints/receivers. `MapCanvas.tsx` tries three things in
-order: (1) `VITE_MAP_STYLE_URL` if set — a self-hosted tile service, see
-below; (2) the public `demotiles.maplibre.org` CDN, which isn't reachable
-from every network; (3) a flat offline-color fallback with no basemap detail
-at all, just so the scenario's own layers still render on *something*. For
-real streets, build the self-hosted tiles once:
-
-```bash
-scripts/build_map_tiles.sh
-```
-
-This downloads a Berlin OSM extract (~100MB, cached after the first run)
-plus some shared low-zoom water/coastline datasets planetiler needs
-regardless of area (~1.3GB combined, also cached — this is the slow part,
-only happens once) and builds `map-tiles/berlin.mbtiles`, scoped to the area
-the example/test scenarios already use. Then:
-
-```bash
-docker compose up -d tiles
-```
-
-`frontend/.env.development` already points a plain `npm run dev` at
-`http://localhost:8081/styles/basic-preview/style.json` (tileserver-gl's
-auto-generated style name for an mbtiles it's given with no config.json —
-confirm at `http://localhost:8081/styles.json` if you rebuild with a
-differently-named file); the `ui` compose service gets the same URL via
-`VITE_MAP_STYLE_URL`. Confirm it's serving real data:
-
-```bash
-curl -s http://localhost:8081/styles/basic-preview/style.json | python3 -m json.tool | head -20
-```
-
-Expect a real MapLibre style document with vector `sources` referencing
-`berlin.mbtiles` (not the flat single-layer fallback). Skip this whole
-section if you don't need to see real map detail — the flat-color fallback
-still lets you verify every other M3 behavior below.
-
-Start the dev server. The machine's Node is now consolidated to a single
-nvm-managed v24 LTS (see `frontend/.nvmrc`), so a plain `npm run dev` from
-`frontend/` works fine in a normal interactive terminal — but
-`frontend/dev.sh` is still the more robust choice since it explicitly
-resolves `nvm use default` itself rather than relying on your shell already
-having done so (matters for non-interactive launchers, or if some other
-project's `nvm use` is still active in that terminal):
-
-```bash
-frontend/dev.sh
-```
-
-Open **http://localhost:5173** in a browser. You should land on the
-scenario library page, listing scenarios from the M2 database — including
-`manual-check scenario` if you ran the M2 section above.
-
-1. Click **Edit** on a scenario to open the editor. You should see a
-   MapLibre map, a timeline scrubber at the bottom (`t = 0.0s / ...`), and
-   `+ Zone` / `+ Mission` / `+ Receiver` / `+ Timeline event` buttons.
-2. Click **+ Mission**. A drone mission with a default 2-waypoint trajectory
-   appears; the header changes to `revision 0 · unsaved changes` and the
-   timeline extends to cover the new mission's duration.
-3. Click **Save**. The header should change to `revision 1 · saved` — this
-   is a real `PUT` to the M2 draft-update endpoint with optimistic
-   concurrency (the `revision` number), not local-only UI state.
-4. Click **Validate**, then **Publish**, then use **← Library** to go back
-   — the scenario's "Current version" column should now say `published`.
-5. Click **Play** on the timeline to scrub through the mission and confirm
-   the drone position on the map advances with it.
-
-If you want proof this isn't just visual: refresh the page after step 3.
-The mission you added should still be there — it came back from Postgres
-through the M2 API, not from browser state.
-
-Automated checks for this milestone, from `frontend/`:
+Frontend checks, from `frontend/`:
 
 ```bash
 npm run typecheck
-npm test
-npm run e2e   # needs the backend + frontend dev servers running
+npm test          # 143 tests as of 2026-09-08
+npm run lint      # oxlint
+npm run format:check   # prettier
+npm run e2e       # needs the backend + frontend dev servers running
 ```
 
-## M4 — SigMF recording catalogue
+The rest of this guide is about *seeing specific things work*, one
+milestone at a time — skip to whichever you care about.
 
-You'll do three kinds of checks here:
+## Common setup used by several sections below
 
-1. **API check via the browser** — click through the interactive docs, no code.
-2. **End-to-end check via curl** — actually register a fake recording and see
-   it come back out of the catalogue.
+M5, M6, M8, M9 and M10 all need the same three things first: a scenario, a
+draft on it, and a registered recording. Rather than repeat this in every
+section, do it once here and reuse `$SCENARIO_ID`/`$DRAFT_ID`/
+`$RECORDING_ID` (or re-run this block per section if you want independent
+scenarios — either works, nothing below depends on a specific name).
 
-(Automated lint/type/test checks for M4 are already covered above.)
-
-### Look at the API in your browser
-
-With the server from M0 still running, open **http://localhost:8000/docs**.
-You'll see a `recordings` section:
-
-- `POST /recordings` — register a SigMF asset pair
-- `GET /recordings` — list the catalogue
-- `GET /recordings/{recording_id}` — fetch one
-- `GET /recordings/{recording_id}/versions` — version history
-
-Expand any of them and click "Try it out" to fire a real request against
-your local server. `GET /recordings` should return `200` with a JSON array
-— that alone confirms the route, DB connection and response schema all
-work.
-
-To register something real through this UI, you need object keys that
-actually exist in MinIO — that's what the next part sets up.
-
-### End-to-end: register a real recording
-
-**1. Upload a tiny synthetic SigMF pair to MinIO.** SigMF recordings
-normally come from real captures, but the catalogue only cares that the two
-objects exist and are internally consistent, so a synthetic one is enough
-to exercise the whole path. Save this as `/tmp/upload_test_sigmf.py` and run
-it (with the venv still active):
+**A synthetic SigMF recording**, uploaded straight to MinIO (a real capture
+isn't needed — the catalogue only cares the two objects exist and are
+internally consistent):
 
 ```python
+# save as /tmp/upload_test_sigmf.py
 import hashlib, json, struct
 import boto3
 
-# 100 fake complex float32 (cf32_le) samples — 8 bytes each.
 samples = b"".join(struct.pack("<ff", 0.001 * i, -0.001 * i) for i in range(100))
-sha512 = hashlib.sha512(samples).hexdigest()
-
 meta = {
-    "global": {
-        "core:datatype": "cf32_le",
-        "core:sample_rate": 1_000_000,
-        "core:sha512": sha512,
-    },
+    "global": {"core:datatype": "cf32_le", "core:sample_rate": 1_000_000,
+               "core:sha512": hashlib.sha512(samples).hexdigest()},
     "captures": [{"core:sample_start": 0, "core:frequency": 2_400_000_000}],
     "annotations": [],
 }
-
-s3 = boto3.client(
-    "s3",
-    endpoint_url="http://localhost:9000",
-    aws_access_key_id="rogue",
-    aws_secret_access_key="rogue_dev_password",
-)
+s3 = boto3.client("s3", endpoint_url="http://localhost:9000",
+                   aws_access_key_id="rogue", aws_secret_access_key="rogue_dev_password")
 s3.put_object(Bucket="rogue", Key="manual-check/test.sigmf-meta", Body=json.dumps(meta).encode())
 s3.put_object(Bucket="rogue", Key="manual-check/test.sigmf-data", Body=samples)
 print("uploaded manual-check/test.sigmf-meta and manual-check/test.sigmf-data")
@@ -416,553 +243,214 @@ print("uploaded manual-check/test.sigmf-meta and manual-check/test.sigmf-data")
 python /tmp/upload_test_sigmf.py
 ```
 
-**2. Register it through the API.**
+**Scenario + draft + registered recording:**
 
 ```bash
-curl -s -X POST http://localhost:8000/recordings \
+SCENARIO=$(curl -s -X POST http://localhost:8000/scenarios \
   -H "Content-Type: application/json" \
-  -d '{
-    "metadata_object_key": "manual-check/test.sigmf-meta",
-    "data_object_key": "manual-check/test.sigmf-data",
-    "provenance": "manual check"
-  }' | python3 -m json.tool
+  -d '{"name":"manual-check scenario","owner":"manual-check",
+       "area_of_operation":{"type":"Polygon","coordinates":[[[13.0,52.0],[13.6,52.0],[13.6,52.6],[13.0,52.6],[13.0,52.0]]]}}')
+SCENARIO_ID=$(echo "$SCENARIO" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+
+DRAFT=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts \
+  -H "Content-Type: application/json" -d '{"author":"manual-check"}')
+DRAFT_ID=$(echo "$DRAFT" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+
+RECORDING=$(curl -s -X POST http://localhost:8000/recordings \
+  -H "Content-Type: application/json" \
+  -d '{"metadata_object_key":"manual-check/test.sigmf-meta","data_object_key":"manual-check/test.sigmf-data","provenance":"manual check"}')
+RECORDING_ID=$(echo "$RECORDING" | python3 -c "import sys,json;print(json.load(sys.stdin)['recording']['id'])")
 ```
 
-Expect a `201`-shaped body: a `"recording"` object with a generated `id`,
-`version: 1`, the computed `sample_rate_hz`, `sample_count`, `duration_s`,
-`center_frequency_hz: 2400000000.0`, and an empty `"findings": []`.
+That recording's `core:sample_rate` is 1 MHz, so any RF link scheduled on
+it occupies ~1 MHz centered on its scripted frequency.
 
-Copy the `id` value from the response, then:
+## M0 — repository shell & health check
 
 ```bash
-RECORDING_ID=<paste the id here>
+uvicorn rogue.main:app --reload --app-dir backend
+```
+```bash
+curl -s http://localhost:8000/health -w "\nHTTP %{http_code}\n"
+```
+Expect `{"status":"ok","service":"rogue-api"}` and `HTTP 200`. Leave it
+running — every curl-based section below uses it (or use the containerized
+`api` from Quick Start instead; both work identically).
+
+## M1 — scenario domain model
+
+No HTTP surface — the typed Pydantic schema everything else is built on
+(`backend/rogue/domain/`), proven by round-tripping the example scenario:
+
+```bash
+PYTHONPATH=backend python3 - <<'EOF'
+from rogue.domain.scenario import ScenarioVersion
+from rogue.domain.serialization import from_yaml, to_yaml
+from rogue.domain.validation import validate_scenario_version
+
+text = open("examples/scenarios/single-drone-orbit.yaml").read()
+version = from_yaml(ScenarioVersion, text)
+print("parsed:", version.scenario_id, "version", version.version_number)
+print("missions:", [m.name for m in version.missions])
+print("validation findings:", validate_scenario_version(version))
+print("round-trip equal:", from_yaml(ScenarioVersion, to_yaml(version)) == version)
+EOF
+```
+Expect one mission (`recon-1`), an empty findings list, `round-trip equal:
+True`.
+
+## M2 — scenario persistence & API
+
+With a server running (M0):
+
+```bash
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID/validate | python3 -m json.tool
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID/publish | python3 -m json.tool
+curl -s http://localhost:8000/scenarios/$SCENARIO_ID/versions/1 | python3 -m json.tool
+```
+
+(Uses the scenario/draft from **Common setup** above.) Expect `validate` to
+return one `"warning"`-severity `empty_scenario` finding (an empty scenario
+is legal, just noteworthy); `publish` returns `version_number: 1` carrying
+that finding; `GET .../versions/1` returns the same, now-immutable version.
+
+## M3 — Scenario Development page
+
+Frontend feature — click through a browser. See **Quick start** above for
+starting the frontend; **http://localhost:5173** either way.
+
+**Self-hosted basemap (optional, one-time):** without it, the map falls
+back to a flat offline color — every behavior below still works, you just
+won't see real streets.
+
+```bash
+scripts/build_map_tiles.sh          # downloads a Berlin OSM extract, ~1.4GB combined, cached after first run
+docker compose up -d tiles
+curl -s http://localhost:8081/styles/basic-preview/style.json | python3 -m json.tool | head -20   # confirm real vector sources, not a flat fallback
+```
+
+**Walkthrough:**
+
+1. Open the library, click **Edit** on `manual-check scenario`. You should
+   see the map, a **Spatial Knowledge** column (Objects/Doppler tabs;
+   Zones/Missions/Receivers lists) on the right of it, a full-width
+   **Signal Knowledge** row (RF links table, spectrum preview, waterfalls)
+   below that, and a Timeline scrub strip at the bottom.
+2. Click **+ Mission** — a drone with a default 2-waypoint trajectory
+   appears; header shows `revision 0 · unsaved changes`.
+3. Click **Save** → `revision 1 · saved` (a real `PUT` with optimistic
+   concurrency, not local UI state — refresh the page to confirm the
+   mission survived).
+4. Click **Validate**, then **Publish** — back in the library, "Current
+   version" should now say `published`.
+5. Click **Play** on the timeline — the drone position on the map should
+   advance with it.
+6. Add a receiver (**+ Receiver**), switch Spatial Knowledge to the
+   **Doppler** tab — you should see range/range-rate for each
+   receiver×mission pair at the current scrub time.
+7. Click **Replay →** in the header — this takes you to the Replay Plans
+   chooser for this scenario (M6/M7 territory; see those sections for what
+   to expect there once you have a compiled plan).
+
+Automated checks: `npm run typecheck`, `npm test`, `npm run e2e` (see
+**Automated checks** above).
+
+## M4 — SigMF recording catalogue
+
+**Browse the API:** http://localhost:8000/docs → `recordings` section —
+`POST`/`GET /recordings`, `GET /recordings/{id}`, `GET
+/recordings/{id}/versions`. "Try it out" fires real requests.
+
+**End-to-end** (the recording from **Common setup** above already exercised
+register → fetch; this adds the negative case):
+
+```bash
 curl -s http://localhost:8000/recordings/$RECORDING_ID | python3 -m json.tool
 curl -s http://localhost:8000/recordings | python3 -m json.tool
 curl -s http://localhost:8000/recordings/$RECORDING_ID/versions | python3 -m json.tool
 ```
 
-These should return the same recording, show it in the catalogue list, and
-show a one-entry version history.
-
-**3. See validation actually reject something.** Prove the catalogue isn't
-just accepting anything, by uploading a data object whose length doesn't
-match a whole number of samples:
+**See validation actually reject something** — upload a data object whose
+length doesn't match a whole sample count:
 
 ```python
-# append to /tmp/upload_test_sigmf.py or run separately
+# append to /tmp/upload_test_sigmf.py, or run standalone
 s3.put_object(Bucket="rogue", Key="manual-check/bad.sigmf-meta", Body=json.dumps(meta).encode())
 s3.put_object(Bucket="rogue", Key="manual-check/bad.sigmf-data", Body=samples[:-3])  # truncated
 ```
-
 ```bash
 curl -s -X POST http://localhost:8000/recordings \
   -H "Content-Type: application/json" \
-  -d '{
-    "metadata_object_key": "manual-check/bad.sigmf-meta",
-    "data_object_key": "manual-check/bad.sigmf-data"
-  }' | python3 -m json.tool
+  -d '{"metadata_object_key":"manual-check/bad.sigmf-meta","data_object_key":"manual-check/bad.sigmf-data"}' \
+  | python3 -m json.tool
 ```
+Expect a `4xx` with a `sigmf_data_length_mismatch` (or
+`sigmf_checksum_mismatch`) finding; nothing gets persisted.
 
-Expect a `4xx` response body listing a `sigmf_data_length_mismatch` (or
-`sigmf_checksum_mismatch`, since truncating also breaks the declared
-`core:sha512`) finding, and nothing gets persisted for it.
-
-**4. Look at the raw database row (optional).**
-
+**Raw DB row (optional):**
 ```bash
 psql postgresql://rogue:rogue_dev_only@localhost:5432/rogue \
   -c "select id, version, access_classification, created_at from iq_recordings;"
 ```
 
-You should see one row for the recording from step 2 (the rejected one from
-step 3 won't appear — rejects are never written).
+### Recording schedule + spectrum waterfall (supplemental — not a numbered milestone)
+
+Builds on M1+M4: a spectrogram overview computed once at ingest, signal-vs-
+background recording kind, silence spans/overlap validation.
+
+**A recording big enough for a spectrogram overview** (256+ samples;
+`test.sigmf-data` above is only 100):
+
+```python
+samples_big = b"".join(struct.pack("<ff", 0.001 * i, -0.001 * i) for i in range(2000))
+meta_big = {"global": {"core:datatype": "cf32_le", "core:sample_rate": 1_000_000},
+            "captures": [{"core:sample_start": 0, "core:frequency": 2_400_000_000}], "annotations": []}
+s3.put_object(Bucket="rogue", Key="manual-check/overview.sigmf-meta", Body=json.dumps(meta_big).encode())
+s3.put_object(Bucket="rogue", Key="manual-check/overview.sigmf-data", Body=samples_big)
+```
+```bash
+curl -s -X POST http://localhost:8000/recordings \
+  -H "Content-Type: application/json" \
+  -d '{"metadata_object_key":"manual-check/overview.sigmf-meta","data_object_key":"manual-check/overview.sigmf-data","provenance":"manual check overview"}' \
+  | python3 -m json.tool
+```
+Expect `"kind": "signal"` and a non-null `overview_spectrogram` (150
+time bins × 256 freq bins) — computed once here, not recomputed on later
+reads.
+
+**Background-kind** (add `"kind": "background"` to the same POST body) —
+expect it echoed back; this is what `RecordingPicker.tsx` groups by.
+
+**Silence + overlap** — attach one RF link with a signal span, a silence
+span (`"recording": null`, requires `duration_override`), and a third span
+overlapping the first, then `validate` the draft: expect an
+`overlapping_emissions` BLOCKING finding. Fix the overlap and re-validate —
+finding disappears, silence span untouched. (Full request body: see git
+history of this file, or build it interactively in the editor — Emissions
+rows have a **Silence** checkbox that does the same thing.)
+
+**In the editor UI:** select an RF link → Emissions rows show the Silence
+checkbox; the recording picker suffixes `· background` on background-kind
+recordings; the Waterfall panel under the map shows "No active emission" /
+"Silence — link is off-air" / a heatmap with a moving playhead depending on
+scrub position.
 
 ## M5 — RF spectrum planner
 
-M5 is a single read-only endpoint,
-`POST /scenarios/{id}/drafts/{id}/spectrum`, that computes deterministic
-spectrum occupancy and conflict/headroom findings for a draft at one
-scenario-time instant — nothing is persisted by calling it. This walkthrough
-sets up a scenario/draft (M2), registers a synthetic recording (M4), attaches
-three overlapping RF links to a mission, and calls the new endpoint.
+Single read-only endpoint, `POST /scenarios/{id}/drafts/{id}/spectrum` —
+computes deterministic occupancy/conflict findings at one instant, nothing
+persisted.
 
-**1. Scenario + draft** (same pattern as M2):
-
-```bash
-SCENARIO=$(curl -s -X POST http://localhost:8000/scenarios \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "manual-check spectrum scenario",
-    "owner": "manual-check",
-    "area_of_operation": {"type":"Polygon","coordinates":[[[13.0,52.0],[13.6,52.0],[13.6,52.6],[13.0,52.6],[13.0,52.0]]]}
-  }')
-SCENARIO_ID=$(echo "$SCENARIO" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
-
-DRAFT=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts \
-  -H "Content-Type: application/json" -d '{"author":"manual-check"}')
-DRAFT_ID=$(echo "$DRAFT" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
-```
-
-**2. A synthetic recording** — reuses the same upload script as M4's
-end-to-end section (run that section's `/tmp/upload_test_sigmf.py` first if
-you haven't already):
-
-```bash
-RECORDING=$(curl -s -X POST http://localhost:8000/recordings \
-  -H "Content-Type: application/json" \
-  -d '{
-    "metadata_object_key": "manual-check/test.sigmf-meta",
-    "data_object_key": "manual-check/test.sigmf-data",
-    "provenance": "manual check spectrum"
-  }')
-RECORDING_ID=$(echo "$RECORDING" | python3 -c "import sys,json;print(json.load(sys.stdin)['recording']['id'])")
-```
-
-That recording's `core:sample_rate` is 1 MHz — every occupied band below is
-therefore ±500 kHz around its link's scripted frequency.
-
-**3. Attach three RF links to a mission** — two comfortably inside their
-declared band and 1 MHz apart (so their occupied bands overlap each other),
-plus a third squeezed into a band far narrower than 1 MHz (so its occupied
-band doesn't fit inside its own declared band):
+**Three overlapping RF links** (two 1 MHz apart inside their declared band,
+a third squeezed into a band too narrow for its own occupied bandwidth):
 
 ```bash
 curl -s -X PUT http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID \
   -H "Content-Type: application/json" \
   -d '{
-    "author": "manual-check",
-    "expected_revision": 0,
-    "zones": [], "receivers": [], "timeline_events": [],
-    "recordings": [{"recording_id": "'"$RECORDING_ID"'", "version": 1}],
-    "missions": [{
-      "name": "recon-1",
-      "platform": {"name": "Quad", "category": "multirotor", "max_speed_mps": 18.0},
-      "trajectory": {
-        "template": "waypoint_transit",
-        "default_speed_mps": 12.0,
-        "waypoints": [
-          {"sequence_index": 0, "position": {"type": "Point", "coordinates": [13.4, 52.2]}, "altitude_m": 100.0},
-          {"sequence_index": 1, "position": {"type": "Point", "coordinates": [13.45, 52.25]}, "altitude_m": 100.0}
-        ]
-      },
-      "rf_links": [
-        {
-          "role": "c2",
-          "band": {"freq_min_hz": 2.4e9, "freq_max_hz": 2.4835e9},
-          "frequency_behaviour": {"mode": "scripted", "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.410e9}]},
-          "emissions": [{"recording": {"recording_id": "'"$RECORDING_ID"'", "version": 1}}]
-        },
-        {
-          "role": "video",
-          "band": {"freq_min_hz": 2.4e9, "freq_max_hz": 2.4835e9},
-          "frequency_behaviour": {"mode": "scripted", "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.4105e9}]},
-          "emissions": [{"recording": {"recording_id": "'"$RECORDING_ID"'", "version": 1}}]
-        },
-        {
-          "role": "telemetry",
-          "band": {"freq_min_hz": 2.4100e9, "freq_max_hz": 2.4102e9},
-          "frequency_behaviour": {"mode": "scripted", "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.4101e9}]},
-          "emissions": [{"recording": {"recording_id": "'"$RECORDING_ID"'", "version": 1}}]
-        }
-      ]
-    }]
-  }' | python3 -m json.tool
-```
-
-**4. Call the spectrum endpoint:**
-
-```bash
-curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID/spectrum \
-  -H "Content-Type: application/json" -d '{"at_seconds": 0.0}' | python3 -m json.tool
-```
-
-Expect `"occupied_bands"` with 3 entries (one per link, each `bandwidth_hz:
-1000000.0`) and `"findings"` with 4 entries: one `"bandwidth_exceeds_band"`
-finding at `"severity": "blocking"` for the `telemetry` link (its declared
-200 kHz band can't fit a 1 MHz-wide occupied band), and three
-`"spectral_overlap"` findings at `"severity": "warning"` — one per pair of
-links, since all three occupied bands overlap each other. Overlap is
-reported, never rejected — CLAUDE.md's spectrum-planning rule 5 requires
-intentional overlap to stay legal by default.
-
-**5. See an idle link and an unresolved frequency mode (optional).** Change
-`at_seconds` to something far in the future, or add a fourth link with
-`"frequency_behaviour": {"mode": "mission_triggered", "mission_trigger_anchor": "waypoint:1"}`
-and no `scripted_changes` — the mission-triggered link contributes no
-occupied band and instead produces a `"frequency_unresolved"` warning
-finding, since the backend has no mission-time-evaluation engine yet (that
-logic is still frontend-only, M3's `missionEvaluator.ts`).
-
-## Recording schedule + spectrum waterfall (supplemental)
-
-Not one of CLAUDE.md's numbered M1–M14 milestones — added by direct request,
-building on M1 (domain model) and M4 (catalogue). Three things to check:
-a spectrogram overview computed once at ingest (not live per request),
-signal-vs-background recording kind, and silence spans/overlap validation on
-a `DroneRfLink`'s emissions.
-
-### 1. A recording large enough to get a spectrogram overview
-
-The overview needs at least 256 samples to compute even one FFT window (M4's
-`test.sigmf-meta`/`test.sigmf-data` fixture above is only 100 — too short).
-Upload a bigger synthetic one:
-
-```python
-# append to /tmp/upload_test_sigmf.py, or run standalone with the same s3 client setup
-samples_big = b"".join(struct.pack("<ff", 0.001 * i, -0.001 * i) for i in range(2000))
-meta_big = {
-    "global": {"core:datatype": "cf32_le", "core:sample_rate": 1_000_000},
-    "captures": [{"core:sample_start": 0, "core:frequency": 2_400_000_000}],
-    "annotations": [],
-}
-s3.put_object(Bucket="rogue", Key="manual-check/overview.sigmf-meta", Body=json.dumps(meta_big).encode())
-s3.put_object(Bucket="rogue", Key="manual-check/overview.sigmf-data", Body=samples_big)
-print("uploaded manual-check/overview.sigmf-meta and manual-check/overview.sigmf-data")
-```
-
-Register it:
-
-```bash
-curl -s -X POST http://localhost:8000/recordings \
-  -H "Content-Type: application/json" \
-  -d '{
-    "metadata_object_key": "manual-check/overview.sigmf-meta",
-    "data_object_key": "manual-check/overview.sigmf-data",
-    "provenance": "manual check overview"
-  }' | python3 -m json.tool
-```
-
-Expect `"kind": "signal"` (the default) and a non-null `"overview_spectrogram"`
-with 150 entries in `time_offsets_s`/`magnitude_db` and 256 in
-`freq_offsets_hz` — computed once here, at ingest, not recomputed on every
-later read of this recording.
-
-### 2. A background-kind recording
-
-```bash
-curl -s -X POST http://localhost:8000/recordings \
-  -H "Content-Type: application/json" \
-  -d '{
-    "metadata_object_key": "manual-check/overview.sigmf-meta",
-    "data_object_key": "manual-check/overview.sigmf-data",
-    "provenance": "manual check background",
-    "kind": "background"
-  }' | python3 -m json.tool
-```
-
-Expect `"kind": "background"` in the response — this is what
-`RecordingPicker.tsx` groups/labels by in the editor, and what the frontend's
-"only replay background data" scheduling choice actually selects.
-
-### 3. Silence spans and overlap validation
-
-Reuse the scenario/draft pattern from M5 section 1, and the recording from
-step 1 above (`$RECORDING_ID`). Build a mission with one RF link carrying
-three emissions: a signal span, a silence span (`"recording": null`, which
-requires `duration_override`), and a third span placed to deliberately
-overlap the first:
-
-```bash
-curl -s -X PUT http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID \
-  -H "Content-Type: application/json" \
-  -d '{
-    "author": "manual-check",
-    "expected_revision": 0,
-    "zones": [], "receivers": [], "timeline_events": [],
-    "recordings": [{"recording_id": "'"$RECORDING_ID"'", "version": 1}],
-    "missions": [{
-      "name": "recon-1",
-      "platform": {"name": "Quad", "category": "multirotor", "max_speed_mps": 18.0},
-      "trajectory": {
-        "template": "waypoint_transit",
-        "default_speed_mps": 12.0,
-        "waypoints": [
-          {"sequence_index": 0, "position": {"type": "Point", "coordinates": [13.4, 52.2]}, "altitude_m": 100.0},
-          {"sequence_index": 1, "position": {"type": "Point", "coordinates": [13.45, 52.25]}, "altitude_m": 100.0}
-        ]
-      },
-      "rf_links": [{
-        "role": "c2",
-        "band": {"freq_min_hz": 2.4e9, "freq_max_hz": 2.4835e9},
-        "frequency_behaviour": {"mode": "scripted", "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.410e9}]},
-        "emissions": [
-          {"recording": {"recording_id": "'"$RECORDING_ID"'", "version": 1}, "start_offset": "PT0S", "duration_override": "PT10S"},
-          {"recording": null, "start_offset": "PT15S", "duration_override": "PT5S"},
-          {"recording": {"recording_id": "'"$RECORDING_ID"'", "version": 1}, "start_offset": "PT5S", "duration_override": "PT10S"}
-        ]
-      }]
-    }]
-  }' | python3 -m json.tool
-
-curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID/validate | python3 -m json.tool
-```
-
-Expect the `PUT` to succeed (silence with an explicit duration is a valid
-emission) and `validate` to return an `"overlapping_emissions"` BLOCKING
-finding — the first (`0s`–`10s`) and third (`5s`–`15s`) emissions overlap by
-5 seconds. Fix it by changing the third emission's `start_offset` to
-`"PT10S"` (right after the first ends) and re-run `validate`: the finding
-should disappear, leaving the silence span untouched in between.
-
-### 4. In the editor UI
-
-With the frontend dev server running (see the M3 section) and the same
-scenario open:
-
-1. Select the mission's RF link in the properties pane. Under **Emissions**,
-   each row now has a **Silence** checkbox — checking it clears the
-   recording picker and requires a duration (label changes to "Duration
-   (required)"); unchecking it restores the picker.
-2. The recording picker groups by platform as before, and now suffixes
-   `· background` on any recording registered with `"kind": "background"`
-   (step 2 above) so you can tell them apart from signal recordings at a
-   glance.
-3. Under **Resource preference (non-binding)**, check "Set a resource
-   preference for this link" — tag/sync-class/notes fields appear. This is
-   authored intent only; it never binds the link to a specific SDR (CLAUDE.md
-   rule 1) — there's deliberately no device/serial field here.
-4. In the timeline area below the map, a **Waterfall** panel renders per RF
-   link: "No active emission" before the mission starts, "Silence — link is
-   off-air" during the silence span you added, and a heatmap with a moving
-   amber playhead once an emission with a computed overview is active. Play
-   the timeline and confirm the playhead advances.
-
-## M6 — Replay Plan compiler
-
-M6 compiles a *published* `ScenarioVersion` (not a draft) into an immutable
-`ReplayPlan`: realized frequency events, RF windows/composite channels and a
-physical-channel allocation, against a declared/simulated
-`HardwareCapabilityProfile` — never real, runtime-discovered hardware (that's
-M8/M10). This walkthrough publishes a small scenario (M2) with one recording
-(M4) and one RF link, then compiles it.
-
-**1. Scenario, draft, recording** (same pattern as M5's setup):
-
-```bash
-SCENARIO=$(curl -s -X POST http://localhost:8000/scenarios \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "manual-check replay-plan scenario",
-    "owner": "manual-check",
-    "area_of_operation": {"type":"Polygon","coordinates":[[[13.0,52.0],[13.6,52.0],[13.6,52.6],[13.0,52.6],[13.0,52.0]]]}
-  }')
-SCENARIO_ID=$(echo "$SCENARIO" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
-
-DRAFT=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts \
-  -H "Content-Type: application/json" -d '{"author":"manual-check"}')
-DRAFT_ID=$(echo "$DRAFT" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
-
-RECORDING=$(curl -s -X POST http://localhost:8000/recordings \
-  -H "Content-Type: application/json" \
-  -d '{
-    "metadata_object_key": "manual-check/test.sigmf-meta",
-    "data_object_key": "manual-check/test.sigmf-data",
-    "provenance": "manual check replay plan"
-  }')
-RECORDING_ID=$(echo "$RECORDING" | python3 -c "import sys,json;print(json.load(sys.stdin)['recording']['id'])")
-```
-
-**2. Attach one RF link, then publish** (compiling requires a *version*, not
-a draft — this is the same publish call as M2):
-
-```bash
-curl -s -X PUT http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID \
-  -H "Content-Type: application/json" \
-  -d '{
-    "author": "manual-check",
-    "expected_revision": 0,
-    "zones": [], "receivers": [], "timeline_events": [],
-    "missions": [{
-      "name": "recon-1",
-      "platform": {"name": "Quad", "category": "multirotor", "max_speed_mps": 18.0},
-      "trajectory": {
-        "template": "waypoint_transit",
-        "default_speed_mps": 12.0,
-        "waypoints": [
-          {"sequence_index": 0, "position": {"type": "Point", "coordinates": [13.4, 52.2]}, "altitude_m": 100.0},
-          {"sequence_index": 1, "position": {"type": "Point", "coordinates": [13.45, 52.25]}, "altitude_m": 100.0}
-        ]
-      },
-      "rf_links": [{
-        "role": "c2",
-        "band": {"freq_min_hz": 2.4e9, "freq_max_hz": 2.4835e9},
-        "frequency_behaviour": {"mode": "scripted", "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.412e9}]},
-        "emissions": [{"recording": {"recording_id": "'"$RECORDING_ID"'", "version": 1}}]
-      }]
-    }]
-  }' > /dev/null
-
-VERSION=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID/publish)
-VERSION_NUMBER=$(echo "$VERSION" | python3 -c "import sys,json;print(json.load(sys.stdin)['version_number'])")
-```
-
-**3. Compile it** (`duration_s` is the compile horizon — how far into the
-scenario the plan covers, since there's no scenario-duration field yet;
-`capability_profile` is omitted here, so it defaults to
-`DEFAULT_CAPABILITY_PROFILE`, the illustrative 24-channel profile from
-CLAUDE.md section 4):
-
-```bash
-PLAN=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/versions/$VERSION_NUMBER/compile \
-  -H "Content-Type: application/json" -d '{"duration_s": 20.0}')
-PLAN_ID=$(echo "$PLAN" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
-echo "$PLAN" | python3 -m json.tool
-```
-
-Expect one `rf_windows` entry (the single link's occupied band, centered on
-2.412 GHz) and one `allocations` entry pointing at an `x440-1` channel (the
-first capability-profile channel whose tunable range covers 2.412 GHz),
-`safety_policy_outcome.tx_authorized: false` (compiling never authorizes
-transmission — that's M8), and `findings: []`. Keep `$SCENARIO_ID`/`$PLAN_ID`
-around — the M7 section below continues from here.
-
-**4. List/fetch the compiled plan:**
-
-```bash
-curl -s http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans | python3 -m json.tool
-```
-
-**5. See a rejected compile (optional).** Re-run step 3 with a much smaller
-`capability_profile` (e.g. one channel with `"max_usable_bandwidth_hz":
-1000.0`) in the request body — the link's ~1 MHz occupied bandwidth no
-longer fits any configured channel, so the response is `422` with a
-`rf_window_infeasible` BLOCKING finding and nothing is persisted (check
-step 4 again: the plan list is unchanged).
-
-## M7 — Simulated SDR execution
-
-M7 executes a compiled `ReplayPlan` (M6) through prepare → arm → start →
-stop against an in-process simulated adapter — no real hardware, no
-network, no separate Agent process (that's M8). This walkthrough continues
-from the M6 section above: reuse its `$SCENARIO_ID`/`$PLAN_ID` if your
-shell session still has them, or just re-run M6's steps 1-3 first.
-
-**1. Create and prepare a run** (reserves every allocated channel,
-verifies the plan's pinned recording hashes against the catalogue, then
-preflights/configures each channel — all in one call):
-
-```bash
-RUN=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs \
-  -H "Content-Type: application/json" -d '{"operator": "manual-check"}')
-RUN_ID=$(echo "$RUN" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
-echo "$RUN" | python3 -m json.tool
-```
-
-Expect `"status": "prepared"` and three `events` (`reserved`,
-`prefetch_verified`, `configured`) plus one `device_leases` entry per
-allocated channel.
-
-**2. Walk it through arm → start → stop**, checking the event list grows
-(never shrinks) and the status advances at each step:
-
-```bash
-curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID/arm \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status'], len(d['events']))"
-
-curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID/start \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status'], len(d['events']))"
-
-curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID/stop \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status'], len(d['events']))"
-```
-
-Expect `armed 4`, `running 5`, `stopped 6` (exact counts depend on how many
-channels the plan allocated — one channel in this setup).
-
-**3. Confirm the run's evidence via `GET`:**
-
-```bash
-curl -s http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID \
-  | python3 -m json.tool
-```
-
-**4. Emergency-stop, from any state.** Create a second run and trigger
-emergency-stop mid-`running` — this path takes no request body, is not
-idempotency-key gated, and is always accepted (never 404s or 409s):
-
-```bash
-RUN2=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs \
-  -H "Content-Type: application/json" -d '{"operator": "manual-check"}')
-RUN2_ID=$(echo "$RUN2" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
-
-curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN2_ID/arm > /dev/null
-curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN2_ID/start > /dev/null
-
-curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN2_ID/emergency-stop \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])"
-```
-
-Expect `emergency_stopped`.
-
-**5. List every run for the plan:**
-
-```bash
-curl -s http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs | python3 -m json.tool
-```
-
-Expect both runs from steps 1 and 4, in creation order.
-
-## M8 — Distributed SDR Agent
-
-M8 replaces M7's in-process `MockSDRAdapter` with real, separate Agent
-processes reached over NATS (still simulated hardware — see ADR-008). This
-section needs the **full** stack, not just `postgres`/`minio`, and drives
-everything through the containerized `api` rather than a local `uvicorn`.
-
-**1. Build and start the full stack:**
-
-```bash
-docker compose up -d --build postgres nats minio minio-init api simulated-agent-1 simulated-agent-2
-```
-
-Wait a few seconds, then confirm both Agents registered themselves:
-
-```bash
-curl -s http://localhost:8000/agents | python3 -c "
-import sys, json
-for a in json.load(sys.stdin):
-    print(a['agent_id'], a['status'], len(a['capabilities']), 'channels')
-"
-```
-
-Expect `sim-agent-01 online 12 channels` and `sim-agent-02 online 12
-channels` — `sim-agent-01` owns `x440-1`/`air7311-1`, `sim-agent-02` owns
-`x440-2`/`air7311-2` (`ROGUE_AGENT_DEVICE_IDS` in `docker-compose.yml`).
-
-**2. Upload a recording and compile a plan**, same shape as M6's section but
-against the containerized stack (`http://localhost:9000` for MinIO,
-`http://localhost:8000` for the API both still work the same way):
-
-```bash
-python3 -c "
-import hashlib, json, struct
-import boto3
-samples = b''.join(struct.pack('<ff', 0.001 * i, -0.001 * i) for i in range(100))
-meta = {'global': {'core:datatype': 'cf32_le', 'core:sample_rate': 1_000_000,
-                    'core:sha512': hashlib.sha512(samples).hexdigest()},
-        'captures': [{'core:sample_start': 0, 'core:frequency': 2_400_000_000}], 'annotations': []}
-s3 = boto3.client('s3', endpoint_url='http://localhost:9000',
-                   aws_access_key_id='rogue', aws_secret_access_key='rogue_dev_password')
-s3.put_object(Bucket='rogue', Key='m8-manual-check/test.sigmf-meta', Body=json.dumps(meta).encode())
-s3.put_object(Bucket='rogue', Key='m8-manual-check/test.sigmf-data', Body=samples)
-"
-
-SCENARIO=$(curl -s -X POST http://localhost:8000/scenarios -H "Content-Type: application/json" -d '{
-  "name": "m8-manual-check", "owner": "manual",
-  "area_of_operation": {"type":"Polygon","coordinates":[[[13.0,52.0],[13.5,52.0],[13.5,52.5],[13.0,52.5],[13.0,52.0]]]}
-}')
-SCENARIO_ID=$(echo "$SCENARIO" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
-DRAFT=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts -H "Content-Type: application/json" -d '{"author":"manual-check"}')
-DRAFT_ID=$(echo "$DRAFT" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
-RECORDING=$(curl -s -X POST http://localhost:8000/recordings -H "Content-Type: application/json" -d '{
-  "metadata_object_key": "m8-manual-check/test.sigmf-meta", "data_object_key": "m8-manual-check/test.sigmf-data"
-}')
-RECORDING_ID=$(echo "$RECORDING" | python3 -c "import sys,json;print(json.load(sys.stdin)['recording']['id'])")
-
-curl -s -X PUT http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID \
-  -H "Content-Type: application/json" -d '{
     "author": "manual-check", "expected_revision": 0,
     "zones": [], "receivers": [], "timeline_events": [],
+    "recordings": [{"recording_id": "'"$RECORDING_ID"'", "version": 1}],
     "missions": [{
       "name": "recon-1",
       "platform": {"name": "Quad", "category": "multirotor", "max_speed_mps": 18.0},
@@ -970,459 +458,272 @@ curl -s -X PUT http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID \
         {"sequence_index": 0, "position": {"type": "Point", "coordinates": [13.4, 52.2]}, "altitude_m": 100.0},
         {"sequence_index": 1, "position": {"type": "Point", "coordinates": [13.45, 52.25]}, "altitude_m": 100.0}
       ]},
-      "rf_links": [{
-        "role": "c2", "band": {"freq_min_hz": 2.4e9, "freq_max_hz": 2.4835e9},
-        "frequency_behaviour": {"mode": "scripted", "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.412e9}]},
-        "emissions": [{"recording": {"recording_id": "'"$RECORDING_ID"'", "version": 1}}]
-      }]
+      "rf_links": [
+        {"role": "c2", "band": {"freq_min_hz": 2.4e9, "freq_max_hz": 2.4835e9},
+         "frequency_behaviour": {"mode": "scripted", "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.410e9}]},
+         "emissions": [{"recording": {"recording_id": "'"$RECORDING_ID"'", "version": 1}}]},
+        {"role": "video", "band": {"freq_min_hz": 2.4e9, "freq_max_hz": 2.4835e9},
+         "frequency_behaviour": {"mode": "scripted", "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.4105e9}]},
+         "emissions": [{"recording": {"recording_id": "'"$RECORDING_ID"'", "version": 1}}]},
+        {"role": "telemetry", "band": {"freq_min_hz": 2.4100e9, "freq_max_hz": 2.4102e9},
+         "frequency_behaviour": {"mode": "scripted", "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.4101e9}]},
+         "emissions": [{"recording": {"recording_id": "'"$RECORDING_ID"'", "version": 1}}]}
+      ]
     }]
   }' > /dev/null
 
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID/spectrum \
+  -H "Content-Type: application/json" -d '{"at_seconds": 0.0}' | python3 -m json.tool
+```
+
+Expect 3 `occupied_bands` (each `bandwidth_hz: 1000000.0`) and 4 findings:
+one `bandwidth_exceeds_band` BLOCKING (telemetry's 200 kHz band can't fit a
+1 MHz occupied band) and three `spectral_overlap` WARNINGs (every pair of
+the three overlaps). Overlap is reported, never rejected — CLAUDE.md rule 5
+requires intentional overlap to stay legal by default.
+
+## M6 — Replay Plan compiler
+
+Compiles a *published* `ScenarioVersion` into an immutable `ReplayPlan`
+against a declared/simulated (or, per M10, live-discovered) capability
+profile.
+
+```bash
 VERSION=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID/publish)
 VERSION_NUMBER=$(echo "$VERSION" | python3 -c "import sys,json;print(json.load(sys.stdin)['version_number'])")
+
 PLAN=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/versions/$VERSION_NUMBER/compile \
   -H "Content-Type: application/json" -d '{"duration_s": 20.0}')
 PLAN_ID=$(echo "$PLAN" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
-echo "$PLAN" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['allocations'])"
+echo "$PLAN" | python3 -m json.tool
 ```
 
-Expect the allocation to land on `x440-1` (the first capability-profile
-channel whose tunable range covers 2.412 GHz) — that's `sim-agent-01`'s device.
+(Uses the RF links from the M5 draft above — 3 links → 3 `rf_windows`/
+`allocations`, since none of them share `array_group_id`.) `duration_s` is
+the compile horizon. No explicit `capability_profile` → defaults to
+`live-agent-registry` if any Agent is online (M10), else the static
+`default-initial-planning-profile` (24 illustrative channels). Expect
+`safety_policy_outcome.tx_authorized: false` always — compiling never
+authorizes transmission (that's execution, M7+).
 
-**3. Create+prepare a run over the real distributed path**, then check the
-owning Agent's logs show a real cache download — this is the part that
-didn't exist before M8 (M7 only re-checked the catalogue's stored hash,
-never actually cached bytes anywhere):
+**Rejected compile (optional):** re-run with a tiny `capability_profile`
+(e.g. one channel, `"max_usable_bandwidth_hz": 1000.0`) — expect `422` with
+`rf_window_infeasible`, nothing persisted.
+
+## M7 — Simulated SDR execution
+
+Prepare → arm → start → stop against an in-process simulated adapter — no
+real hardware, no network.
 
 ```bash
 RUN=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs \
-  -H "Content-Type: application/json" -d '{"operator": "m8-manual-check"}')
+  -H "Content-Type: application/json" -d '{"operator": "manual-check"}')
 RUN_ID=$(echo "$RUN" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
-echo "$RUN" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status'], [e['kind'] for e in d['events']])"
+echo "$RUN" | python3 -m json.tool   # expect "prepared", 3 events (reserved/prefetch_verified/configured)
 
-docker compose logs simulated-agent-1 --tail=5
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID/arm \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status'], len(d['events']))"
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID/start \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status'], len(d['events']))"
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID/stop \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status'], len(d['events']))"
+```
+Expect the status to advance and the event count to only ever grow.
+
+**Emergency-stop from any state** — no request body, not idempotency-key
+gated, always accepted:
+```bash
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID/emergency-stop \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])"
 ```
 
-Expect `prepared ['reserved', 'prefetch_verified', 'configured']` and a
-`cache miss ... downloading` line in the Agent's log.
+**Or drive this from the UI instead:** go to the scenario's **Replay →**
+page, use **Create run** on the compiled plan, then Arm/Start/Stop from the
+Replay page's controls — the map shows the drone's live position (driven
+by run time, not the authoring scrub) and a waterfall tile per physical
+channel.
 
-**4. Arm and start it, then watch the central lease-sweep renew the lease**
-without you doing anything — this runs on a ~10s interval
-(`LEASE_TTL_SECONDS / 3`) purely from the API process's background task:
+## M8 — Distributed SDR Agent
 
+M7's in-process adapter replaced by real, separate Agent processes over
+NATS (still simulated hardware — ADR-008). Use the full `docker compose up
+-d --build` stack from **Quick start**, not local `uvicorn`.
+
+**Confirm both Agents, compile against them, run it:**
 ```bash
-curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID/arm > /dev/null
-curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID/start > /dev/null
+curl -s http://localhost:8000/agents | python3 -c "
+import sys, json
+for a in json.load(sys.stdin): print(a['agent_id'], a['status'], len(a['capabilities']))
+"
+```
+Expect `sim-agent-01`/`sim-agent-02`, `online`, 12 capabilities each. Then
+repeat M6/M7 above against the containerized API (`localhost:8000` is the
+same either way) — the allocation should land on `x440-1` or `air7311-1`
+(owned by `sim-agent-01`), and `docker compose logs simulated-agent-1
+--tail=5` should show a real cache-download line once you create+prepare a
+run (M7 only re-checked a stored hash; M8 actually caches bytes).
 
+**Lease renewal, unattended:**
+```bash
 sleep 12
 curl -s http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID \
   | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['device_leases'][0]['expires_at'], [e['kind'] for e in d['events']])"
 ```
+Expect at least one `lease_renewed` event (runs on a ~10s interval purely
+from the API's background task).
 
-Expect at least one `lease_renewed` event and an `expires_at` further in the
-future than when you started.
-
-**5. Kill the owning Agent mid-`RUNNING`** and confirm the central sweep
-reaches a safe terminal state on its own:
-
+**Kill the owning Agent mid-run:**
 ```bash
 docker compose stop simulated-agent-1
-
 sleep 20
 curl -s http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID \
   | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status']); [print(e['kind'], e['message']) for e in d['events'][-2:]]"
 ```
-
-Expect `emergency_stopped`, with the last two events being `error`s
-explaining the Agent didn't respond to the renewal/emergency-stop commands
-— this is expected and correct: the run still lands in a terminal,
-never-transmitting-again state even though the physical stop command
-couldn't reach a dead process. (In real hardware this exact scenario is
-what the Agent-side *local* watchdog independently covers — it isn't
-exercised here since the Agent process itself is the one that's dead.)
-
-**6. Bring the Agent back** and confirm it re-registers:
+Expect `emergency_stopped` — the central lease sweep reaches a safe
+terminal state even though the physical stop command can't reach a dead
+process.
 
 ```bash
 docker compose start simulated-agent-1
-sleep 7
-curl -s http://localhost:8000/agents | python3 -c "
-import sys, json
-print([(a['agent_id'], a['status']) for a in json.load(sys.stdin)])
-"
 ```
-
-Expect both agents `online` again.
+brings it back and it re-registers within a few seconds.
 
 ## M9 — First real adapter (Ettus X440)
 
-**This section was written but not run by the assistant** — the
-development environment used to build M9 has no `uhd` Python package and
-no physical X440 attached (confirmed: `import uhd` fails, `lsusb` shows no
-USRP-like device). ADR-009 records this explicitly: M9's exit criterion
-(actual cabled/attenuated replay) is unverified until *you* run the steps
-below in your lab. Everything else about `EttusX440Adapter` — command
-sequencing, the real-TX safety gate, bounded-chunk streaming — is covered
-by `tests/unit/agents/test_x440_adapter.py` against a fake `UHDDevice`,
-which *has* been run (`pytest tests/unit/agents/test_x440_adapter.py`).
+**Unverified — no UHD install or physical X440 available in the dev
+environment this was built in.** ADR-009 records this explicitly.
+`EttusX440Adapter`'s command sequencing, real-TX safety gate and bounded-
+chunk streaming are covered by `pytest tests/unit/agents/test_x440_adapter.py`
+against a fake `UHDDevice`; the actual hardware path needs you to run this
+in a lab.
 
-**Safety first — read this before connecting anything.** `ROGUE_ENABLE_REAL_TX=1`
-is a real transmit-enable switch (CLAUDE.md §10). Do not run this against
-an antenna. Use a cabled, attenuated setup: X440 TX port → fixed
-attenuator (enough to bring the output well under your spectrum
-analyzer's/receiver's safe input level) → spectrum analyzer or a second
-SDR configured as a receiver. Confirm your attenuation budget before
-enabling TX, not after.
-
-**1. Install the X440 extra on the Agent host** (bare-metal, not
-docker-compose — ADR-004):
+**Safety first.** `ROGUE_ENABLE_REAL_TX=1` is a real transmit-enable switch
+(CLAUDE.md rule 12). Never point this at an antenna — cabled/attenuated
+only: X440 TX → fixed attenuator (sized to your analyzer/receiver's safe
+input level) → spectrum analyzer or a second SDR as receiver.
 
 ```bash
 pip install .[x440]
-python -c "import uhd; print(uhd.__version__)"
-```
-
-If this doesn't import cleanly, stop here and fix the UHD installation
-first — none of the following will work otherwise. Also confirm the device
-is enumerable:
-
-```bash
+python -c "import uhd; print(uhd.__version__)"    # must succeed before anything below will
 uhd_find_devices
 ```
 
-**2. Confirm `_open_real_uhd_device`'s UHD calls against your installed
-version.** `agents/common/x440_adapter.py`'s module docstring and ADR-009
-both flag this explicitly: the exact API shape (`uhd.usrp.MultiUSRP`,
-`StreamArgs`, `TuneRequest`, `TXMetadata`, range-object `.start()`/`.stop()`)
-was written against UHD's documented API, not exercised against a real
-install. A quick sanity script:
-
+Confirm `agents/common/x440_adapter.py`'s UHD calls (`MultiUSRP`,
+`StreamArgs`, `TuneRequest`, `TXMetadata`) against your installed version —
+written against documented UHD API, not exercised against a real install:
 ```python
 import uhd
 usrp = uhd.usrp.MultiUSRP("addr=<your X440's address>")
 print(usrp.get_tx_num_channels())
 print(usrp.get_tx_freq_range(0))
 ```
+Adjust the adapter if anything doesn't match, re-run
+`pytest tests/unit/agents/test_x440_adapter.py`.
 
-Adjust `agents/common/x440_adapter.py` if any of these calls don't match
-your UHD version's actual signatures, then re-run
-`pytest tests/unit/agents/test_x440_adapter.py` to confirm the rest of the
-adapter's logic still holds.
-
-**3. Register a real recording** (same as M4/M8's steps — a short,
-`cf32_le` SigMF pair; `EttusX440Adapter` only supports `cf32_le` in this
-pass) via the control plane, compile a plan targeting the X440's
-capability profile, exactly as in the M8 section above, but stop before
-creating the run.
-
-**4. Start the Agent process in `x440` mode** on the machine physically
-connected to the X440 (not in docker-compose):
-
+Then: register a real `cf32_le` recording, compile a plan (M6, stop before
+creating a run), start the Agent —
 ```bash
-ROGUE_AGENT_ID=x440-lab-01 \
-ROGUE_AGENT_MODE=x440 \
-ROGUE_AGENT_DEVICE_IDS=x440-1 \
-ROGUE_X440_DEVICE_ARGS="addr=<your X440's address>" \
-ROGUE_ENABLE_REAL_TX=1 \
-ROGUE_NATS_URL=nats://<control-server-lab-address>:4222 \
-ROGUE_S3_ENDPOINT=http://<control-server-lab-address>:9000 \
+ROGUE_AGENT_ID=x440-lab-01 ROGUE_AGENT_MODE=x440 ROGUE_AGENT_DEVICE_IDS=x440-1 \
+ROGUE_X440_DEVICE_ARGS="addr=<your X440's address>" ROGUE_ENABLE_REAL_TX=1 \
+ROGUE_NATS_URL=nats://<control-server>:4222 \
+ROGUE_S3_ENDPOINT=http://<control-server>:9000 \
 ROGUE_S3_ACCESS_KEY=rogue ROGUE_S3_SECRET_KEY=rogue_dev_password \
 python -m agents.common.main
 ```
-
-Confirm it registers: `curl -s http://<control-server>:8000/agents` should
-list `x440-lab-01` online with real device-discovered capabilities (not
-the static default profile — `discover()` reads back actual UHD ranges).
-
-**5. Create+arm+start the run** exactly as in the M8 section, watching
-your spectrum analyzer for the expected signal at the compiled center
-frequency once `start` is called. Confirm `stop`/`emergency-stop` actually
-cease transmission (visually, on the analyzer) — this is the part no unit
-test can substitute for.
-
-**6. Confirm the safety gate** by repeating with `ROGUE_ENABLE_REAL_TX`
-unset (or `0`): `start` should fail with a `RealTxNotAuthorizedError`
-surfaced as a run `error` event, and the analyzer should show nothing.
-
-Report back (or file as a follow-up) anything in step 2 that needed
-adjusting — that feedback is exactly what turns this from "code complete,
-hardware-unverified" into "done."
+— confirm it registers with real device-discovered capabilities (not the
+static default), create+arm+start a run and watch the analyzer, confirm
+`stop`/`emergency-stop` actually cease transmission, and confirm `start`
+fails with `ROGUE_ENABLE_REAL_TX` unset. Report back anything that needed
+adjusting.
 
 ## M10 — AIR7311 adapter + live capability-based scheduling
 
-M10 has two independent parts. **The live-scheduling part was actually run
-and verified in this session** (it needs no special hardware — just the
-existing `docker compose` stack). **The AIR7311 hardware part was not** —
-same constraint as M9: no SoapySDR bindings, no physical AIR7311 here.
+**Part A — live scheduling** (needs no special hardware, just Agents
+online): covered above in M6/M8 — compiling with no explicit
+`capability_profile` picks up `live-agent-registry` once an Agent is
+online, and falls back to the static default once none are (stop both
+simulated Agents, wait ~20s past their presence-staleness window, recompile
+and confirm `capability_profile.id == "default-initial-planning-profile"`).
 
-### Part A — live capability-based scheduling (verified in this session)
-
-This proves `rogue.persistence.replay.compile_and_store_replay_plan` now
-schedules against the live agent registry (M8's `GET /agents`) instead of
-always the static `DEFAULT_CAPABILITY_PROFILE`, once at least one Agent is
-online.
-
-**1. Bring up the full stack** (same as the M8 section):
-
-```bash
-docker compose up -d --build postgres nats minio minio-init api simulated-agent-1 simulated-agent-2
-sleep 6
-curl -s http://localhost:8000/agents | python3 -c "
-import sys, json
-for a in json.load(sys.stdin):
-    print(a['agent_id'], a['status'], len(a['capabilities']))
-"
-```
-
-Expect both `sim-agent-01`/`sim-agent-02` `online` with 12 capabilities
-each.
-
-**2. Register a recording and publish a scenario version** (same pattern
-as M6/M8/M9's sections — a scenario, one recording, one RF link at
-2.412 GHz), then **compile without an explicit `capability_profile`**:
+**Part B — DeepwaveAIR7311Adapter: hardware-verified 2026-09-08.** Full
+detail, exact device args, and the caveat about the lab unit's Python 3.10
+SoapySDR bindings (worked around via a temporary, narrowly-scoped
+SoapyRemote exception) are in **ADR-011** — not repeated here. Summary: a
+real AIR7311 registered live, the compiler scheduled against it, and a full
+`reserve→prefetch_verified→configure→arm→start→stop` cycle ran real,
+40 dB-attenuated TX, correctly refusing to start with `ROGUE_ENABLE_REAL_TX`
+unset. If you're setting this up yourself:
 
 ```bash
-PLAN=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/versions/$VERSION_NUMBER/compile \
-  -H "Content-Type: application/json" -d '{"duration_s": 20.0}')
-echo "$PLAN" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-print('capability_profile.id =', d['capability_profile']['id'])
-print('allocations =', d['allocations'])
-"
+SoapySDRUtil --find     # confirm `driver = SoapyAIRT` — the exact value ROGUE_AIR7311_DEVICE_ARGS needs
 ```
-
-Expect `capability_profile.id = live-agent-registry` (not
-`default-initial-planning-profile`) and the allocation landing on one of
-the running Agents' real device_ids (`x440-1`, in this compose setup).
-This is exactly what was run to confirm M10's live-scheduling piece — the
-output above is real, not illustrative.
-
-**3. Confirm the fallback still works.** Stop both agent containers, wait
-past their presence-staleness window, and compile again:
-
 ```bash
-docker compose stop simulated-agent-1 simulated-agent-2
-sleep 20
-curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/versions/$VERSION_NUMBER/compile \
-  -H "Content-Type: application/json" -d '{"duration_s": 20.0}' \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['capability_profile']['id'])"
-```
-
-Expect `default-initial-planning-profile` — the static default, since no
-agent is online.
-
-### Part B — DeepwaveAIR7311Adapter (verified 2026-09-08, see caveat below)
-
-The AIR7311 is a Deepwave AIR-T unit: the RF front end is directly attached
-to an embedded NVIDIA Jetson/Orin compute module, which **is** the Agent
-host (ADR-004) — there is no separate PC in between. SoapySDR runs locally
-on that Orin, and only ROGUE's own NATS/S3 traffic crosses the Ethernet
-link to the control plane (ADR-005: no vendor-library remoting).
-
-**Caveat on how this was actually verified:** the specific AIR-T unit used
-here ships Python 3.10.12 (`airstack` OS image), while ROGUE needs 3.11+
-(`datetime.UTC`) and targets 3.12. Rather than reimage the device or rebuild
-its ABI-locked `python3-soapysdr` bindings from source, this pass ran
-`agents.common.main` on the **control-plane host** (Python 3.12) against the
-Orin over `soapyremote-server` (`ROGUE_AIR7311_DEVICE_ARGS=
-"driver=remote,remote=<orin-ip>,remote:driver=SoapyAIRT"`) — an explicit,
-documented, temporary exception to ADR-005 §1, recorded in
-`docs/decisions/ADR-011-temporary-soapyremote-exception-for-m10-verification.md`.
-Steps 1-2 below were run directly on the Orin (unaffected by any of this);
-steps 4-6 were run this way instead of directly on the Orin. **This is not
-the target production deployment shape** — a real Agent host still needs
-native Python 3.12 + matching SoapySDR bindings; see ADR-011 for why this
-was judged an acceptable narrow exception for M10 verification specifically
-(no timing-critical synchronization requirement at stake, unlike M11+).
-
-**1. Confirm SoapySDR sees the device** (already shipped on the AIR-T's
-`airstack` OS image — no separate install needed on Deepwave-provided
-units):
-
-```bash
-SoapySDRUtil --find
-```
-
-Confirmed output on a real unit:
-
-```
-Found device 0
-  driver = SoapyAIRT
-  hardware = AIR7311
-  serial = 31068155
-  ...
-```
-
-`driver = SoapyAIRT` is the key line — that's the exact driver name to use
-in `ROGUE_AIR7311_DEVICE_ARGS` below, not a generic placeholder. If more
-than one AIRT unit could ever be on the same network/host, disambiguate
-with `driver=SoapyAIRT,serial=<serial>`.
-
-**2. Confirm `_open_real_soapy_device`'s API calls against your installed
-SoapySDR/`airstack` version.** `agents/common/air7311_adapter.py`'s module
-docstring and ADR-010 both flag this: the exact call shape
-(`SoapySDR.Device`, `setFrequency`/`setSampleRate`/`setBandwidth`/
-`setGain`, `setupStream`/`activateStream`/`writeStream`) was written
-against SoapySDR's documented API, not exercised against a real install:
-
-```python
-import SoapySDR
-from SoapySDR import SOAPY_SDR_TX
-device = SoapySDR.Device("driver=SoapyAIRT")
-print(device.getNumChannels(SOAPY_SDR_TX))       # expect 4 (2 channels x 2 daughtercards)
-print(device.getFrequencyRange(SOAPY_SDR_TX, 0))
-```
-
-Adjust `agents/common/air7311_adapter.py` if anything doesn't match, then
-re-run `pytest tests/unit/agents/test_air7311_adapter.py`.
-
-**3. Cabled/attenuated setup — same safety note as M9.** AIR7311 TX port →
-fixed attenuator → spectrum analyzer or receiving SDR. Confirm your
-attenuation budget before enabling TX. **Start with
-`ROGUE_ENABLE_REAL_TX=0`** and confirm presence/`discover()`/`configure`
-work before ever setting it to `1`.
-
-**4. Start the Agent in `air7311` mode.** On a Python 3.12-native Agent host,
-run this directly on the Orin (same network as the control-plane host —
-confirm with `ifconfig`/`ip addr` that its Ethernet interface, e.g. `eth0`,
-is reachable from the control-plane host's IP on ports 4222/NATS and
-9000/MinIO before starting) with `ROGUE_AIR7311_DEVICE_ARGS="driver=
-SoapyAIRT"`. **If the Orin is still Python 3.10 like the unit this was
-verified against**, run the Agent process on the control-plane host instead,
-with `soapyremote-server` running on the Orin (see the ADR-011 caveat
-above):
-
-```bash
-ROGUE_AGENT_ID=air7311-orin-01 \
-ROGUE_AGENT_MODE=air7311 \
-ROGUE_AGENT_DEVICE_IDS=air7311-1 \
-ROGUE_AIR7311_DEVICE_ARGS="driver=remote,remote=<orin-ip>,remote:driver=SoapyAIRT" \
-ROGUE_ENABLE_REAL_TX=0 \
-ROGUE_NATS_URL=nats://<control-server-lab-ip>:4222 \
-ROGUE_S3_ENDPOINT=http://<control-server-lab-ip>:9000 \
+ROGUE_AGENT_ID=air7311-orin-01 ROGUE_AGENT_MODE=air7311 ROGUE_AGENT_DEVICE_IDS=air7311-1 \
+ROGUE_AIR7311_DEVICE_ARGS="driver=SoapyAIRT" ROGUE_ENABLE_REAL_TX=0 \
+ROGUE_NATS_URL=nats://<control-server>:4222 \
+ROGUE_S3_ENDPOINT=http://<control-server>:9000 \
 ROGUE_S3_ACCESS_KEY=rogue ROGUE_S3_SECRET_KEY=rogue_dev_password \
 python -m agents.common.main
 ```
+(If your Agent host is still Python 3.10 like the unit ADR-011 documents,
+see that ADR for the SoapyRemote workaround device-args instead.) Same
+cabled/attenuated safety setup as M9; same `ROGUE_ENABLE_REAL_TX=0` first,
+confirm presence/`discover()`/`configure`, then `1`.
 
-(Drop `remote,remote=<orin-ip>,remote:` and use plain `driver=SoapyAIRT` for
-the native-3.12-on-Orin case.) Note SoapyAIRT tolerates only one client
-connection at a time — stop the Agent before running any other SoapySDR
-script against the same device, or connections will time out.
+## M11–M13 (partial) — coherent-group RF window generation
 
-**5. Confirm real discovered capabilities show up in the registry.** Once
-the Orin's Agent process connects, `GET /agents` should show
-`air7311-orin-01` online with capabilities read back from the real device
-via `discover()` (`agents/common/agent.py`'s `AgentRuntime.run()` refreshes
-from the adapter before its first presence publish) — not the illustrative
-static defaults. Confirm the reported `tunable_ranges_hz`/
-`max_usable_bandwidth_hz` look like real AIR7311 numbers, not
-`[[70000000.0, 6000000000.0]]`/`100000000.0` (the static profile's
-placeholder values) coincidentally.
+Domain + compiler slice only (ADR-012) — no execution/orchestrator/NATS/
+agent changes, so nothing here needs real or simulated hardware to verify:
 
-**6. Compile, create+arm+start a run** exactly as in the M8/M9 sections
-(compiling with no explicit `capability_profile` will now schedule against
-this real, live-discovered AIR7311 per M10 — confirm
-`capability_profile.id == "live-agent-registry"` in the compiled plan).
-Watch the spectrum analyzer for the expected signal, then confirm
-`stop`/`emergency-stop` actually cease transmission and that the real-TX
-gate refuses `start` with `ROGUE_ENABLE_REAL_TX` unset — same checks as
-M9, on the AIR7311 path this time.
+```bash
+pytest tests/unit/domain/test_geometry.py tests/unit/domain/test_mission_evaluator.py \
+       tests/unit/compiler/test_coherent_groups.py tests/unit/compiler/test_windows.py \
+       tests/unit/compiler/test_allocation.py tests/unit/compiler/test_compile.py -v
+```
 
-**Confirmed 2026-09-08** (single-channel scenario, physical 40 dB attenuator
-between the tested channel's TX/RX loopback — see ADR-011's "Outcome"
-section for the full result): `capability_profile.id ==
-"live-agent-registry"`; with `ROGUE_ENABLE_REAL_TX=0`, `start` failed with
-the expected real-TX-not-authorized error after `reserve`/`prefetch_verified`
-/`configure`/`arm` all succeeded; with `ROGUE_ENABLE_REAL_TX=1`, the full
-`reserve -> prefetch_verified -> configure -> arm -> start` cycle succeeded
-and `SoapyRemote` set up and streamed a real TX burst
-(`SoapyRemote::setupTxStream`) to the physical hardware, then `stop`
-completed cleanly. Two real bugs in `agents/common/agent.py`'s PREFLIGHT
-handling were found and fixed in the process — see git history / ADR-011's
-"Outcome" section for detail; they were latent because this dispatch path
-had never previously run against a real (non-`MockSDRAdapter`) adapter.
-Not exercised: a second physical channel (no attenuator was available on
-it this session — real TX was deliberately withheld there), and
-`emergency-stop` specifically (only plain `stop` was exercised).
-
-Report back anything in step 2 that needed adjusting.
+To see it end to end: publish a scenario with one `DroneRfLink` carrying an
+`array_group_id`, plus 2+ `Receiver`s (type `tdoa` or `aoa_doa`) sharing
+that same `array_group_id`, then compile it (M6 above) — expect **N
+separate `rf_windows`** (one per receiver element, never merged even
+though they're frequency-identical) each with exactly one
+`CompositeChannel` carrying a non-null `coherent_group_id`,
+`array_element_receiver_id`, and a computed `delay_offset_s` (plus
+`phase_offset_rad` for `aoa_doa` elements), and **N allocations landing on N
+distinct physical channels** — or, if not enough channels are free, **zero**
+allocations for the whole group plus one
+`insufficient_physical_channels_for_coherent_group` finding (atomic, not
+partial).
 
 ## Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`)
 
-Everything above uses synthetic recordings. `scripts/ingest_drone_corpus.py`
-is a small CLI tool that instead pulls real captures from a Droids-style
-SigMF drone-RF dataset (one subdirectory per drone class, e.g.
-`00`, `01`, ..., `no_drone`) and registers a representative sample through
-the same M4 catalogue. Only relevant if you have such a dataset mounted
-locally — e.g. `/media/cristian/Crucial X62/DroneIQRecordings/Droids_data11_sigmf/15June2022`.
-
-**1. Preview the selection without touching anything:**
+Everything above uses synthetic recordings. This CLI instead pulls real
+captures from a Droids-style SigMF drone-RF dataset (one subdirectory per
+drone class) and registers a representative sample through the M4
+catalogue. Only relevant if you have such a dataset mounted locally.
 
 ```bash
-python scripts/ingest_drone_corpus.py \
-  --source-root "/media/cristian/Crucial X62/DroneIQRecordings/Droids_data11_sigmf/15June2022" \
-  --dry-run
+python scripts/ingest_drone_corpus.py --source-root "<path-to-dataset>" --dry-run     # preview, nothing uploaded
+python scripts/ingest_drone_corpus.py --source-root "<path-to-dataset>"               # for real, streamed in 8MB chunks
 ```
 
-Expect a list of one recording per drone-class subdirectory (drone id,
-platform name pulled from the recording's own `classification:platform`
-SigMF field, and which experiment scenario was picked — `air` preferred,
-falling back to `los`/`env`/etc.) with a total size, and nothing uploaded.
-
-**2. Run it for real** (needs the M0 server and section 0's Postgres/MinIO
-running):
-
-```bash
-python scripts/ingest_drone_corpus.py \
-  --source-root "/media/cristian/Crucial X62/DroneIQRecordings/Droids_data11_sigmf/15June2022"
-```
-
-Expect one `registered as <uuid> v1` line per drone class, streamed to MinIO
-in 8MB chunks (never buffering a full ~32MB recording in memory) and ending
-in `N/N ingested successfully`.
-
-**Targeting a specific experiment/band instead of the default per-drone
-pick:** pass `--scenario` and/or `--band` to filter on the SigMF filename's
-`exp=`/`fc=` tokens (e.g. `--scenario both --band 5800e6` for "drone and
-controller both transmitting, 5.8GHz" — only 4 of the 17 drone classes in
-the 15June2022 campaign have a 5.8GHz recording at all, so this naturally
-skips the rest with a `no matching SigMF recording under ...` note):
-
-```bash
-python scripts/ingest_drone_corpus.py \
-  --source-root "/media/cristian/Crucial X62/DroneIQRecordings/Droids_data11_sigmf/15June2022" \
-  --scenario both --band 5800e6 --dry-run
-```
-
-**3. Verify what landed:**
-
+Filter with `--scenario`/`--band` (e.g. `--scenario both --band 5800e6`).
+Verify what landed:
 ```bash
 curl -s "http://localhost:8000/recordings?limit=50" | python3 -m json.tool
 psql postgresql://rogue:rogue_dev_only@localhost:5432/rogue \
   -c "select id, version, provenance from iq_recordings where provenance like 'campaign=%' order by created_at;"
 ```
 
-Each row's `provenance` string encodes the campaign, drone id and platform
-(e.g. `campaign=15June2022, drone_id=00, platform=DJI Mavic 2 Pro, ...`), so
-you can tell these apart from the synthetic M4 test data above at a glance.
-
-**Note on reruns:** this is *not* idempotent — rerunning without deleting the
-old rows first registers brand-new catalogue entries (duplicates), since no
-`recording_id` is passed to update in place. If you're just re-verifying,
-either accept the duplicates or delete the `iq_recordings` rows for that
-campaign first (same `psql` pattern as above, with `delete from` instead of
-`select`).
+**Not idempotent** — rerunning without deleting old rows first creates
+duplicates (no `recording_id` is passed to update in place).
 
 ## Cleanup
 
-- Stop the backend server with `Ctrl-C`; stop `frontend/dev.sh` with `Ctrl-C`
-  in its terminal too.
-- Everything created above (`manual-check scenario` in Postgres, the
-  `manual-check/*` objects in MinIO, the `iq_recordings`/`replay_plans` rows)
-  is harmless test data — delete it if you want a clean slate, or leave it;
-  nothing in the app treats it specially.
-- If you ran the drone corpus loader, its rows/objects are real reference
-  data rather than throwaway test fixtures — worth keeping rather than
-  deleting, unless you were just testing the script itself (see its "note on
-  reruns" above).
+- `docker compose stop` (keep data) or `docker compose down -v` (full
+  reset — see **Quick start**).
+- If you ran things locally instead: `Ctrl-C` the `uvicorn`/`frontend/
+  dev.sh` processes.
+- Everything under `manual-check*` (scenario names, MinIO keys, DB rows) is
+  harmless test data — delete it or leave it, nothing treats it specially.
+- Drone-corpus-loader rows are real reference data, not throwaway fixtures
+  — worth keeping unless you were just testing the script itself.
