@@ -125,7 +125,7 @@ export function EditorLayout({
       <div style={{ flex: "1 1 30%", minHeight: 0, padding: "0 var(--space-2) var(--space-2)" }}>
         <SignalPanel
           missions={content.missions}
-          scenarioTimeSeconds={scenarioTimeSeconds}
+          maxSeconds={maxSeconds}
           selection={selection}
           onSelect={select}
           catalogue={catalogue}

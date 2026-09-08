@@ -33,7 +33,7 @@ export interface WaterfallProps {
  * The Y-axis is re-centered on the link's live authored frequency
  * (`currentFrequencyHz`), not the recording's own capture frequency — a
  * display convenience, not a compiled/conflict-checked plan (same
- * disclaimer convention as SpectrumStrip).
+ * authored-intent-only disclaimer as the Signal Knowledge Gantt timeline).
  */
 export function Waterfall({ link, missionName, catalogue }: WaterfallProps) {
   const { scenarioTimeSeconds } = useScenarioTime();
