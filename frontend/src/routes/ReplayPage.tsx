@@ -4,6 +4,7 @@ import { listRecordings } from "../api/recordings";
 import { getReplayPlan } from "../api/replay";
 import { getVersion } from "../api/scenarios";
 import { ChannelWaterfallGrid } from "../components/replay/ChannelWaterfallGrid";
+import { LeasesPanel } from "../components/replay/LeasesPanel";
 import { RunControls } from "../components/replay/RunControls";
 import { RunHeader } from "../components/replay/RunHeader";
 import { WatchdogFeed } from "../components/replay/WatchdogFeed";
@@ -135,9 +136,17 @@ function ReplayPageBody({
           </div>
         </div>
       </Card>
-      <div style={{ flex: "1 1 55%", display: "flex", gap: "var(--space-2)", minHeight: 0 }}>
-        <div style={{ flex: "1 1 55%", minWidth: 0 }}>
-          <Card title="Live position" noPadding style={{ height: "100%" }}>
+      <div style={{ flex: 1, display: "flex", gap: "var(--space-2)", minHeight: 0 }}>
+        <div
+          style={{
+            flex: "1 1 auto",
+            minWidth: 0,
+            display: "flex",
+            flexDirection: "column",
+            gap: "var(--space-2)",
+          }}
+        >
+          <Card title="Live position" noPadding style={{ flex: "0 0 320px" }}>
             <MapCanvas
               zones={version.zones}
               missions={version.missions}
@@ -145,21 +154,38 @@ function ReplayPageBody({
               scenarioTimeSeconds={runElapsedSeconds}
             />
           </Card>
-        </div>
-        <div style={{ flex: "1 1 45%", minWidth: 0 }}>
           <Card
             noPadding
-            style={{ height: "100%" }}
+            style={{ flex: "1 1 auto", minHeight: 0 }}
             bodyStyle={{ overflowY: "auto", height: "100%" }}
           >
-            <ChannelWaterfallGrid plan={plan} catalogue={catalogue} />
+            <ChannelWaterfallGrid plan={plan} catalogue={catalogue} missions={version.missions} />
           </Card>
         </div>
-      </div>
-      <div style={{ flex: "0 0 auto" }}>
-        <Card noPadding>
-          <WatchdogFeed />
-        </Card>
+        <div
+          style={{
+            flex: "0 0 320px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "var(--space-2)",
+            minHeight: 0,
+          }}
+        >
+          <Card
+            noPadding
+            style={{ flex: "1 1 55%", minHeight: 0 }}
+            bodyStyle={{ overflowY: "auto", height: "100%" }}
+          >
+            <WatchdogFeed />
+          </Card>
+          <Card
+            noPadding
+            style={{ flex: "1 1 45%", minHeight: 0 }}
+            bodyStyle={{ overflowY: "auto", height: "100%" }}
+          >
+            <LeasesPanel />
+          </Card>
+        </div>
       </div>
     </div>
   );

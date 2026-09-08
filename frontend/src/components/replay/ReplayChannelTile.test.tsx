@@ -14,6 +14,10 @@ function compositeChannel(overrides: Partial<CompositeChannel> = {}): CompositeC
     bandwidth_hz: 40_000_000,
     gain_offset_db: 0,
     recording: { recording_id: "rec-1", version: 1, note: null },
+    coherent_group_id: null,
+    array_element_receiver_id: null,
+    phase_offset_rad: null,
+    delay_offset_s: null,
     ...overrides,
   };
 }
@@ -96,8 +100,10 @@ describe("ReplayChannelTile", () => {
         channelIndex={0}
         runElapsedSeconds={50}
         catalogue={[]}
+        missions={[]}
         lease={undefined}
         nowMs={0}
+        runRunning={false}
       />,
     );
     expect(screen.getByText(/unmapped \/ idle/i)).toBeInTheDocument();
@@ -111,8 +117,10 @@ describe("ReplayChannelTile", () => {
         channelIndex={0}
         runElapsedSeconds={50}
         catalogue={[recording()]}
+        missions={[]}
         lease={undefined}
         nowMs={0}
+        runRunning={false}
       />,
     );
     expect(screen.getByText(/video/i)).toBeInTheDocument();
@@ -133,8 +141,10 @@ describe("ReplayChannelTile", () => {
         channelIndex={0}
         runElapsedSeconds={50}
         catalogue={[recording()]}
+        missions={[]}
         lease={undefined}
         nowMs={0}
+        runRunning={false}
       />,
     );
     expect(screen.getByText(/\+1 more/)).toBeInTheDocument();
@@ -148,6 +158,7 @@ describe("ReplayChannelTile", () => {
         channelIndex={0}
         runElapsedSeconds={50}
         catalogue={[recording()]}
+        missions={[]}
         lease={{
           id: "lease-1",
           device_id: "x440-1",
@@ -157,6 +168,7 @@ describe("ReplayChannelTile", () => {
           expires_at: new Date(10_000).toISOString(),
         }}
         nowMs={0}
+        runRunning={false}
       />,
     );
     expect(screen.getByText(/lease 10s/)).toBeInTheDocument();

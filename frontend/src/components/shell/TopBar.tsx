@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
+import { useUiPreferences } from "../../state/uiPreferencesContext";
 
 export interface BreadcrumbItem {
   label: string;
@@ -14,33 +15,61 @@ export function TopBar({
   actions?: ReactNode;
 }) {
   const navigate = useNavigate();
+  const { toggleNav } = useUiPreferences();
 
   return (
     <header
       style={{
-        flex: "0 0 auto",
+        height: 44,
+        flex: "0 0 44px",
         display: "flex",
         alignItems: "center",
-        gap: 8,
-        padding: "10px 20px",
-        background: "var(--surface-card)",
-        borderBottom: "1px solid var(--border-default)",
-        minHeight: 20,
+        gap: 10,
+        padding: "0 12px",
+        background: "var(--surface)",
+        borderBottom: "1px solid var(--line)",
       }}
     >
+      <button
+        type="button"
+        onClick={toggleNav}
+        title="Toggle sub-navigation"
+        style={{
+          width: 26,
+          height: 26,
+          display: "grid",
+          placeItems: "center",
+          background: "transparent",
+          border: "1px solid var(--line)",
+          borderRadius: 2,
+          color: "var(--ink-2)",
+          font: "500 11px/1 var(--mono)",
+          padding: 0,
+        }}
+      >
+        ≡
+      </button>
       <nav
         aria-label="Breadcrumb"
-        style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          minWidth: 0,
+          overflow: "hidden",
+          flex: "0 1 auto",
+          fontSize: 12.5,
+        }}
       >
         {breadcrumb.map((item, index) => {
           const isLast = index === breadcrumb.length - 1;
           return (
             <span
               key={`${item.label}-${index}`}
-              style={{ display: "flex", alignItems: "center", gap: 6 }}
+              style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, overflow: "hidden" }}
             >
               {index > 0 && (
-                <span aria-hidden style={{ color: "var(--text-tertiary)", fontSize: 12 }}>
+                <span aria-hidden style={{ color: "var(--line-2)", flex: "0 0 auto" }}>
                   /
                 </span>
               )}
@@ -52,8 +81,9 @@ export function TopBar({
                     background: "none",
                     border: "none",
                     padding: 0,
-                    color: "var(--text-secondary)",
-                    fontSize: 13,
+                    color: "var(--ink-3)",
+                    fontSize: 12.5,
+                    fontWeight: 400,
                     cursor: "pointer",
                   }}
                 >
@@ -62,9 +92,8 @@ export function TopBar({
               ) : (
                 <span
                   style={{
-                    fontSize: 14,
                     fontWeight: isLast ? 600 : 400,
-                    color: isLast ? "var(--text-primary)" : "var(--text-secondary)",
+                    color: isLast ? "var(--ink)" : "var(--ink-3)",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
@@ -77,8 +106,9 @@ export function TopBar({
           );
         })}
       </nav>
+      <div style={{ flex: "1 1 12px", minWidth: 12 }} />
       {actions && (
-        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flex: "0 0 auto" }}>
           {actions}
         </div>
       )}

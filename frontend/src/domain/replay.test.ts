@@ -12,6 +12,10 @@ function compositeChannel(overrides: Partial<CompositeChannel> = {}): CompositeC
     bandwidth_hz: 20_000_000,
     gain_offset_db: 0,
     recording: { recording_id: "rec-1", version: 1, note: null },
+    coherent_group_id: null,
+    array_element_receiver_id: null,
+    phase_offset_rad: null,
+    delay_offset_s: null,
     ...overrides,
   };
 }

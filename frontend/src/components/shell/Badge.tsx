@@ -1,34 +1,37 @@
+import { toneVars, type Tone } from "../../styles/tokens";
+
+/** @deprecated tone names — kept so existing call sites (BadgeTone) keep compiling; prefer Tone ("ok"|"warn"|"bad"|"info"|"mute") directly. */
 export type BadgeTone = "success" | "warning" | "danger" | "info" | "neutral";
 
-const TONE_VARS: Record<BadgeTone, { fg: string; bg: string }> = {
-  success: { fg: "var(--status-success)", bg: "var(--status-success-bg)" },
-  warning: { fg: "var(--status-warning)", bg: "var(--status-warning-bg)" },
-  danger: { fg: "var(--status-danger)", bg: "var(--status-danger-bg)" },
-  info: { fg: "var(--status-info)", bg: "var(--status-info-bg)" },
-  neutral: { fg: "var(--status-neutral)", bg: "var(--status-neutral-bg)" },
+const LEGACY_TONE_MAP: Record<BadgeTone, Tone> = {
+  success: "ok",
+  warning: "warn",
+  danger: "bad",
+  info: "info",
+  neutral: "mute",
 };
 
-/** A small status pill, matching Azure Portal's state-badge convention. */
-export function Badge({ tone, children }: { tone: BadgeTone; children: string }) {
-  const { fg, bg } = TONE_VARS[tone];
+/** A small rounded status pill with a dot, matching the ROGUE Console canvas's tone system. */
+export function Badge({ tone, children }: { tone: BadgeTone | Tone; children: string }) {
+  const resolved: Tone = tone in LEGACY_TONE_MAP ? LEGACY_TONE_MAP[tone as BadgeTone] : (tone as Tone);
+  const { fg, bg, bd } = toneVars(resolved);
   return (
     <span
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 4,
-        padding: "2px 8px",
-        borderRadius: 2,
-        fontSize: 11,
-        fontWeight: 600,
-        letterSpacing: "0.02em",
-        textTransform: "uppercase",
+        gap: 5,
+        padding: "1px 7px",
+        borderRadius: 10,
+        fontSize: 11.5,
+        fontWeight: 500,
         color: fg,
         background: bg,
+        border: `1px solid ${bd}`,
         whiteSpace: "nowrap",
       }}
     >
-      <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: fg }} />
+      <span aria-hidden style={{ width: 5, height: 5, borderRadius: "50%", background: fg }} />
       {children}
     </span>
   );

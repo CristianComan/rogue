@@ -1,61 +1,72 @@
-import type { ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useUiPreferences } from "../../state/uiPreferencesContext";
+
+interface Glyph {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  r: number;
+}
 
 interface NavItem {
+  key: string;
   label: string;
   to: string;
-  icon: ReactNode;
+  glyph: Glyph[];
   isActive: (pathname: string) => boolean;
 }
 
-function HomeIcon() {
-  return (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-    >
-      <path d="M4 11.5 12 4l8 7.5" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M6 10v9h12v-9" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function AntennaIcon() {
-  return (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-    >
-      <path d="M12 3v11" strokeLinecap="round" />
-      <path d="M12 14l-3 7h6l-3-7Z" strokeLinejoin="round" />
-      <path d="M7 6a7 7 0 0 0 0 5" strokeLinecap="round" />
-      <path d="M17 6a7 7 0 0 1 0 5" strokeLinecap="round" />
-      <path d="M4 3a11 11 0 0 0 0 8" strokeLinecap="round" />
-      <path d="M20 3a11 11 0 0 1 0 8" strokeLinecap="round" />
-    </svg>
-  );
-}
-
+/** Simple geometric glyphs — ported 1:1 from the design canvas's rail icons (plain SVG rects, no icon library). */
 const ITEMS: NavItem[] = [
   {
+    key: "library",
     label: "Scenario Library",
     to: "/",
-    icon: <HomeIcon />,
+    glyph: [
+      { x: 2, y: 2, w: 12, h: 3, r: 0.5 },
+      { x: 2, y: 6.5, w: 12, h: 3, r: 0.5 },
+      { x: 2, y: 11, w: 12, h: 3, r: 0.5 },
+    ],
     isActive: (p) => p === "/",
   },
   {
+    key: "dev",
+    label: "Scenario Development",
+    to: "",
+    glyph: [
+      { x: 2, y: 2, w: 12, h: 12, r: 1 },
+      { x: 5, y: 5, w: 6, h: 6, r: 3 },
+    ],
+    isActive: (p) => p.startsWith("/scenarios/") && !p.includes("/replay") && !p.includes("/versions/"),
+  },
+  {
+    key: "replay",
+    label: "Replay",
+    to: "",
+    glyph: [
+      { x: 2, y: 2, w: 3, h: 12, r: 0.5 },
+      { x: 6.5, y: 5, w: 3, h: 9, r: 0.5 },
+      { x: 11, y: 8, w: 3, h: 6, r: 0.5 },
+    ],
+    isActive: (p) => p.includes("/replay"),
+  },
+  {
+    key: "console",
     label: "SDR Console",
     to: "/agents",
-    icon: <AntennaIcon />,
+    glyph: [
+      { x: 1.5, y: 4, w: 13, h: 8, r: 1 },
+      { x: 4, y: 12.5, w: 8, h: 1.6, r: 0.8 },
+    ],
     isActive: (p) => p.startsWith("/agents"),
+  },
+  {
+    key: "notes",
+    label: "Design notes & tokens",
+    to: "/notes",
+    glyph: [{ x: 3, y: 3, w: 10, h: 10, r: 5 }],
+    isActive: (p) => p.startsWith("/notes"),
   },
 ];
 
@@ -63,6 +74,7 @@ const ITEMS: NavItem[] = [
 export function NavRail() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { theme, toggleTheme, density, toggleDensity } = useUiPreferences();
 
   return (
     <nav
@@ -70,66 +82,103 @@ export function NavRail() {
       style={{
         width: "var(--nav-width)",
         flex: "0 0 auto",
-        background: "var(--surface-nav)",
+        background: "var(--rail)",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        paddingTop: 12,
-        gap: 4,
+        padding: "8px 0",
+        gap: 2,
+        zIndex: 40,
       }}
     >
       <div
         aria-hidden
-        title="ROGUE"
         style={{
-          width: 28,
-          height: 28,
-          borderRadius: 6,
-          background: "var(--surface-nav-active)",
-          color: "var(--text-on-accent)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: 12,
-          fontWeight: 700,
-          marginBottom: 16,
+          width: 30,
+          height: 30,
+          border: "1px solid rgba(255,255,255,.22)",
+          display: "grid",
+          placeItems: "center",
+          marginBottom: 10,
         }}
       >
-        R
+        <div style={{ width: 10, height: 10, background: "var(--accent)", transform: "rotate(45deg)" }} />
       </div>
       {ITEMS.map((item) => {
         const active = item.isActive(location.pathname);
         return (
           <button
-            key={item.to}
+            key={item.key}
             type="button"
             title={item.label}
             aria-label={item.label}
             aria-current={active ? "page" : undefined}
-            onClick={() => navigate(item.to)}
+            onClick={() => item.to && navigate(item.to)}
             style={{
-              width: 36,
-              height: 36,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              background: active ? "var(--surface-nav-active)" : "transparent",
+              width: 40,
+              height: 38,
+              display: "grid",
+              placeItems: "center",
+              background: active ? "rgba(255,255,255,.09)" : "transparent",
               border: "none",
-              borderRadius: 6,
-              color: active ? "var(--text-on-accent)" : "var(--text-on-nav)",
-              cursor: "pointer",
-            }}
-            onMouseEnter={(e) => {
-              if (!active) e.currentTarget.style.background = "var(--surface-nav-hover)";
-            }}
-            onMouseLeave={(e) => {
-              if (!active) e.currentTarget.style.background = "transparent";
+              borderLeft: `2px solid ${active ? "var(--accent)" : "transparent"}`,
+              borderRadius: 0,
+              color: active ? "#fff" : "var(--rail-ink)",
+              padding: 0,
             }}
           >
-            {item.icon}
+            <svg width="17" height="17" viewBox="0 0 16 16" aria-hidden="true">
+              {item.glyph.map((g, i) => (
+                <rect
+                  key={i}
+                  x={g.x}
+                  y={g.y}
+                  width={g.w}
+                  height={g.h}
+                  rx={g.r}
+                  style={{ fill: "currentColor" }}
+                />
+              ))}
+            </svg>
           </button>
         );
       })}
+      <div style={{ flex: 1 }} />
+      <button
+        type="button"
+        title="Toggle light / dark"
+        onClick={toggleTheme}
+        style={{
+          width: 40,
+          height: 34,
+          display: "grid",
+          placeItems: "center",
+          background: "transparent",
+          border: "none",
+          color: "var(--rail-ink)",
+          font: "500 10px/1 var(--mono)",
+          letterSpacing: "0.06em",
+        }}
+      >
+        {theme === "dark" ? "LGT" : "DRK"}
+      </button>
+      <button
+        type="button"
+        title="Row density"
+        onClick={toggleDensity}
+        style={{
+          width: 40,
+          height: 34,
+          display: "grid",
+          placeItems: "center",
+          background: "transparent",
+          border: "none",
+          color: "var(--rail-ink)",
+          font: "500 10px/1 var(--mono)",
+        }}
+      >
+        {density === "compact" ? "≣" : "≡"}
+      </button>
     </nav>
   );
 }

@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { cloneScenario, createScenario, listScenarios } from "../api/scenarios";
 import { AppShell } from "../components/shell/AppShell";
 import { Badge } from "../components/shell/Badge";
-import { Card } from "../components/shell/Card";
+import { CommandButton } from "../components/shell/CommandButton";
 import type { GeoPolygon, Scenario } from "../domain/types";
 
 function boundingBoxPolygon(
@@ -26,11 +26,44 @@ function boundingBoxPolygon(
   };
 }
 
+function StatTile({ label, value, sub }: { label: string; value: number; sub: string }) {
+  return (
+    <div
+      style={{
+        background: "var(--surface)",
+        border: "1px solid var(--line)",
+        borderRadius: 3,
+        padding: "11px 13px",
+      }}
+    >
+      <div
+        style={{
+          font: "500 10.5px/1.2 var(--mono)",
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+          color: "var(--ink-3)",
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 7, marginTop: 6 }}>
+        <span style={{ fontSize: 23, fontWeight: 600, letterSpacing: "-0.02em" }}>{value}</span>
+        <span style={{ fontSize: 11.5, color: "var(--ink-3)" }}>{sub}</span>
+      </div>
+    </div>
+  );
+}
+
 /**
  * Scenario library: search/filter, create, clone. Area-of-operation is
  * authored as a bounding box (min/max lon/lat) — drawing it on the map is
  * deferred (see the M3 design note); good enough to get a valid polygon
  * for a new scenario.
+ *
+ * The design canvas's table also shows Zones/Missions/Links/Duration/
+ * Classification columns — those need a per-scenario version fetch (or a
+ * classification field the domain model doesn't have at all), so this
+ * keeps to columns backed by real data from GET /scenarios alone.
  */
 export function ScenarioLibraryPage() {
   const navigate = useNavigate();
@@ -54,32 +87,63 @@ export function ScenarioLibraryPage() {
 
   useEffect(refresh, [ownerFilter, tagFilter, nameFilter]);
 
+  const publishedCount = scenarios.filter((s) => s.current_version_id).length;
+  const ownerCount = useMemo(() => new Set(scenarios.map((s) => s.owner)).size, [scenarios]);
+
   return (
     <AppShell
-      breadcrumb={[{ label: "Scenario Library" }]}
+      breadcrumb={[{ label: "ROGUE", to: "/" }, { label: "Scenario Library" }]}
+      subnav={{
+        pageTitle: "Scenario Library",
+        items: [
+          { label: "All scenarios", count: scenarios.length, active: true },
+          { label: "Published", count: publishedCount },
+          { label: "Drafts", count: scenarios.length - publishedCount },
+        ],
+        footer: "deny-TX default · scenario draft is\nhardware-independent",
+      }}
       actions={
-        <button type="button" data-variant="primary" onClick={() => setShowNewForm((v) => !v)}>
-          + New scenario
-        </button>
+        <CommandButton label="+ New scenario" variant="accent" onClick={() => setShowNewForm((v) => !v)} />
       }
     >
-      <div
-        style={{
-          padding: 20,
-          maxWidth: 1000,
-          margin: "0 auto",
-          display: "flex",
-          flexDirection: "column",
-          gap: 16,
-        }}
-      >
+      <div style={{ padding: "16px 18px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16 }}>
+          <div>
+            <div style={{ fontSize: 20, fontWeight: 600, letterSpacing: "-0.01em" }}>Scenario Library</div>
+            <div style={{ fontSize: 12.5, color: "var(--ink-2)", marginTop: 3 }}>
+              Hardware-independent scenario drafts and published immutable versions.
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input
+              placeholder="Owner"
+              value={ownerFilter}
+              onChange={(e) => setOwnerFilter(e.target.value)}
+              style={{ height: 28, fontSize: 12.5 }}
+            />
+            <input
+              placeholder="Tag"
+              value={tagFilter}
+              onChange={(e) => setTagFilter(e.target.value)}
+              style={{ height: 28, fontSize: 12.5 }}
+            />
+            <input
+              placeholder="Name contains…"
+              value={nameFilter}
+              onChange={(e) => setNameFilter(e.target.value)}
+              style={{ height: 28, width: 200, fontSize: 12.5 }}
+            />
+          </div>
+        </div>
+
         {error && (
           <div
             style={{
               padding: "8px 12px",
-              background: "var(--status-danger-bg)",
-              color: "var(--status-danger)",
-              borderRadius: "var(--radius)",
+              background: "var(--bad-bg)",
+              color: "var(--bad-fg)",
+              border: "1px solid var(--bad-bd)",
+              borderRadius: 3,
               fontSize: 13,
             }}
           >
@@ -96,98 +160,125 @@ export function ScenarioLibraryPage() {
           />
         )}
 
-        <Card
-          title="Scenarios"
-          actions={
-            <div style={{ display: "flex", gap: 6 }}>
-              <input
-                placeholder="Owner"
-                value={ownerFilter}
-                onChange={(e) => setOwnerFilter(e.target.value)}
-                style={{ fontSize: 12, padding: "4px 8px" }}
-              />
-              <input
-                placeholder="Tag"
-                value={tagFilter}
-                onChange={(e) => setTagFilter(e.target.value)}
-                style={{ fontSize: 12, padding: "4px 8px" }}
-              />
-              <input
-                placeholder="Name contains…"
-                value={nameFilter}
-                onChange={(e) => setNameFilter(e.target.value)}
-                style={{ fontSize: 12, padding: "4px 8px" }}
-              />
-            </div>
-          }
-          noPadding
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 10 }}>
+          <StatTile label="Scenarios" value={scenarios.length} sub="total" />
+          <StatTile label="Published" value={publishedCount} sub="immutable versions" />
+          <StatTile label="Drafts" value={scenarios.length - publishedCount} sub="unpublished" />
+          <StatTile label="Owners" value={ownerCount} sub="distinct" />
+        </div>
+
+        <div
+          style={{
+            background: "var(--surface)",
+            border: "1px solid var(--line)",
+            borderRadius: 3,
+            overflow: "hidden",
+          }}
         >
-          <table style={{ width: "100%", fontSize: 13 }}>
-            <thead>
-              <tr style={{ textAlign: "left", borderBottom: "1px solid var(--border-default)" }}>
-                {["Name", "Owner", "Tags", "Version", ""].map((h) => (
-                  <th
-                    key={h}
-                    style={{
-                      padding: "8px 14px",
-                      fontSize: 11,
-                      fontWeight: 600,
-                      letterSpacing: "0.04em",
-                      textTransform: "uppercase",
-                      color: "var(--text-secondary)",
-                    }}
-                  >
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {scenarios.map((s) => (
-                <tr key={s.id} style={{ borderBottom: "1px solid var(--border-subtle)" }}>
-                  <td style={{ padding: "8px 14px", fontWeight: 500 }}>{s.name}</td>
-                  <td style={{ padding: "8px 14px", color: "var(--text-secondary)" }}>{s.owner}</td>
-                  <td style={{ padding: "8px 14px", color: "var(--text-secondary)" }}>
-                    {s.tags.join(", ")}
-                  </td>
-                  <td style={{ padding: "8px 14px" }}>
-                    <Badge tone={s.current_version_id ? "success" : "neutral"}>
-                      {s.current_version_id ? "Published" : "Unpublished"}
-                    </Badge>
-                  </td>
-                  <td
-                    style={{
-                      padding: "8px 14px",
-                      display: "flex",
-                      gap: 6,
-                      justifyContent: "flex-end",
-                    }}
-                  >
-                    <button type="button" onClick={() => navigate(`/scenarios/${s.id}`)}>
-                      Edit
-                    </button>
-                    <button type="button" onClick={() => setCloningId(s.id)}>
-                      Clone
-                    </button>
-                    <button type="button" onClick={() => navigate(`/scenarios/${s.id}/replay`)}>
-                      Replay
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {scenarios.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={5}
-                    style={{ padding: 20, textAlign: "center", color: "var(--text-tertiary)" }}
-                  >
-                    No scenarios match these filters.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </Card>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "8px 12px",
+              borderBottom: "1px solid var(--line)",
+              background: "var(--surface-2)",
+            }}
+          >
+            <div
+              style={{
+                font: "600 11px/1.2 var(--mono)",
+                letterSpacing: "0.09em",
+                textTransform: "uppercase",
+                color: "var(--ink-3)",
+              }}
+            >
+              All scenarios
+            </div>
+            <div style={{ fontSize: 11.5, color: "var(--ink-3)" }}>
+              {scenarios.length} items · click a row for details
+            </div>
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "2.2fr .8fr .9fr 1fr",
+              alignItems: "center",
+              padding: "0 12px",
+              height: 30,
+              borderBottom: "1px solid var(--line)",
+              background: "var(--surface-2)",
+              font: "500 10.5px/1 var(--mono)",
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              color: "var(--ink-3)",
+            }}
+          >
+            <div>Scenario</div>
+            <div>Owner</div>
+            <div>Tags</div>
+            <div>State</div>
+          </div>
+          {scenarios.map((s) => (
+            <div
+              key={s.id}
+              onClick={() => navigate(`/scenarios/${s.id}`)}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "2.2fr .8fr .9fr 1fr",
+                alignItems: "center",
+                padding: "var(--rp) 12px",
+                borderBottom: "1px solid var(--line)",
+                cursor: "pointer",
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div
+                  style={{
+                    fontWeight: 600,
+                    fontSize: 12.5,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {s.name}
+                </div>
+                <div
+                  style={{
+                    font: "400 11px/1.4 var(--mono)",
+                    color: "var(--ink-3)",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {s.id} {s.tags.length > 0 ? `· ${s.tags.join(", ")}` : ""}
+                </div>
+              </div>
+              <div style={{ color: "var(--ink-2)", fontSize: 12.5 }}>{s.owner}</div>
+              <div style={{ color: "var(--ink-2)", fontSize: 12.5 }}>{s.tags.join(", ") || "—"}</div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <Badge tone={s.current_version_id ? "ok" : "mute"}>
+                  {s.current_version_id ? "published" : "draft"}
+                </Badge>
+                <div style={{ display: "flex", gap: 6 }} onClick={(e) => e.stopPropagation()}>
+                  <button type="button" onClick={() => setCloningId(s.id)}>
+                    Clone
+                  </button>
+                  <button type="button" onClick={() => navigate(`/scenarios/${s.id}/replay`)}>
+                    Replay
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+          {scenarios.length === 0 && (
+            <div style={{ padding: 20, textAlign: "center", color: "var(--ink-3)", fontSize: 13 }}>
+              No scenarios match these filters.
+            </div>
+          )}
+        </div>
 
         {cloningId && (
           <CloneScenarioForm
@@ -230,10 +321,23 @@ function NewScenarioForm({ onCreated }: { onCreated: (scenario: Scenario) => voi
   }
 
   return (
-    <Card title="New scenario">
+    <div style={{ background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 3 }}>
+      <div
+        style={{
+          padding: "8px 12px",
+          borderBottom: "1px solid var(--line)",
+          background: "var(--surface-2)",
+          font: "600 11px/1.2 var(--mono)",
+          letterSpacing: "0.09em",
+          textTransform: "uppercase",
+          color: "var(--ink-3)",
+        }}
+      >
+        New scenario
+      </div>
       <div
         data-testid="new-scenario-form"
-        style={{ display: "flex", flexDirection: "column", gap: 8 }}
+        style={{ padding: 12, display: "flex", flexDirection: "column", gap: 8 }}
       >
         <input placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} />
         <input placeholder="Owner" value={owner} onChange={(e) => setOwner(e.target.value)} />
@@ -268,14 +372,14 @@ function NewScenarioForm({ onCreated }: { onCreated: (scenario: Scenario) => voi
             onChange={(e) => setMaxLat(Number(e.target.value))}
           />
         </div>
-        {error && <span style={{ color: "var(--status-danger)", fontSize: 12 }}>{error}</span>}
+        {error && <span style={{ color: "var(--bad-fg)", fontSize: 12 }}>{error}</span>}
         <div>
           <button type="button" data-variant="primary" onClick={submit} disabled={!name || !owner}>
             Create
           </button>
         </div>
       </div>
-    </Card>
+    </div>
   );
 }
 
@@ -315,27 +419,40 @@ function CloneScenarioForm({
         zIndex: 10,
       }}
     >
-      <div style={{ width: 340 }}>
-        <Card title="Clone scenario">
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <input placeholder="New name" value={name} onChange={(e) => setName(e.target.value)} />
-            <input placeholder="Owner" value={owner} onChange={(e) => setOwner(e.target.value)} />
-            {error && <span style={{ color: "var(--status-danger)", fontSize: 12 }}>{error}</span>}
-            <div style={{ display: "flex", gap: 8 }}>
-              <button
-                type="button"
-                data-variant="primary"
-                onClick={submit}
-                disabled={!name || !owner}
-              >
-                Clone
-              </button>
-              <button type="button" onClick={onCancel}>
-                Cancel
-              </button>
-            </div>
+      <div
+        style={{
+          width: 340,
+          background: "var(--surface)",
+          border: "1px solid var(--line)",
+          borderRadius: 3,
+        }}
+      >
+        <div
+          style={{
+            padding: "8px 12px",
+            borderBottom: "1px solid var(--line)",
+            background: "var(--surface-2)",
+            font: "600 11px/1.2 var(--mono)",
+            letterSpacing: "0.09em",
+            textTransform: "uppercase",
+            color: "var(--ink-3)",
+          }}
+        >
+          Clone scenario
+        </div>
+        <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+          <input placeholder="New name" value={name} onChange={(e) => setName(e.target.value)} />
+          <input placeholder="Owner" value={owner} onChange={(e) => setOwner(e.target.value)} />
+          {error && <span style={{ color: "var(--bad-fg)", fontSize: 12 }}>{error}</span>}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button type="button" data-variant="primary" onClick={submit} disabled={!name || !owner}>
+              Clone
+            </button>
+            <button type="button" onClick={onCancel}>
+              Cancel
+            </button>
           </div>
-        </Card>
+        </div>
       </div>
     </div>
   );

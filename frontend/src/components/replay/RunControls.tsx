@@ -1,24 +1,16 @@
 import { useState } from "react";
 import { armRun, emergencyStopRun, startRun, stopRun } from "../../api/runs";
 import { useRunTime } from "../../state/runTimeContext";
-import { colors } from "../../styles/tokens";
 import type { RunStatus } from "../../domain/run";
 
-const buttonStyle = (danger = false) => ({
-  padding: "6px 14px",
-  border: `1px solid ${danger ? colors.severity.critical : colors.border}`,
-  background: danger ? colors.severity.critical : "white",
-  color: danger ? "white" : "black",
-  fontWeight: danger ? 700 : 400,
-  cursor: "pointer",
-});
-
 /**
- * Run controls — square buttons, red-accented for the stop actions, never
- * an authoring scrub. This is a different control surface from the
- * Development page's PlaybackControls/ScrubBar on purpose (design note:
- * "Replay ≠ Dev"). Enabled/disabled per RunStatus so an operator can't send
- * an action the state machine (backend/rogue/domain/run.py) will reject.
+ * Run controls — square, flat buttons with a filled red EMERGENCY STOP,
+ * matching the design canvas's run-control strip. Deliberately a
+ * different control surface from the Development page's PlaybackControls/
+ * ScrubBar (design note: "Replay ≠ Dev"). Each button's enabled state
+ * follows the real RunStatus state machine (backend/rogue/domain/run.py),
+ * not just visual mimicry — an operator can't send a transition the
+ * backend will reject.
  */
 export function RunControls({
   scenarioId,
@@ -51,11 +43,20 @@ export function RunControls({
   const canEmergencyStop: RunStatus[] = ["armed", "running", "stopping"];
 
   return (
-    <div style={{ display: "flex", gap: 8, alignItems: "center", padding: 12 }}>
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "10px 14px",
+        borderLeft: "1px solid var(--line)",
+        background: "var(--surface-2)",
+      }}
+    >
       <button
         type="button"
         disabled={!canArm || busy}
-        style={buttonStyle()}
+        style={{ height: 32, padding: "0 14px", fontSize: 12.5, fontWeight: 600 }}
         onClick={() => act(() => armRun(scenarioId, planId, runId))}
       >
         Arm
@@ -63,7 +64,7 @@ export function RunControls({
       <button
         type="button"
         disabled={!canStart || busy}
-        style={buttonStyle()}
+        style={{ height: 32, padding: "0 14px", fontSize: 12.5, fontWeight: 600 }}
         onClick={() => act(() => startRun(scenarioId, planId, runId))}
       >
         Start
@@ -71,20 +72,21 @@ export function RunControls({
       <button
         type="button"
         disabled={!canStop || busy}
-        style={buttonStyle()}
+        style={{ height: 32, padding: "0 14px", fontSize: 12.5, fontWeight: 600 }}
         onClick={() => act(() => stopRun(scenarioId, planId, runId))}
       >
-        Stop
+        Stop run
       </button>
       <button
         type="button"
+        data-variant="danger"
         disabled={!canEmergencyStop.includes(run.status) || busy}
-        style={buttonStyle(true)}
+        style={{ height: 32, padding: "0 16px", fontSize: 12.5 }}
         onClick={() => act(() => emergencyStopRun(scenarioId, planId, runId))}
       >
-        Emergency stop
+        EMERGENCY STOP
       </button>
-      {error && <span style={{ color: colors.severity.critical, fontSize: 12 }}>{error}</span>}
+      {error && <span style={{ color: "var(--bad-fg)", fontSize: 12 }}>{error}</span>}
     </div>
   );
 }
