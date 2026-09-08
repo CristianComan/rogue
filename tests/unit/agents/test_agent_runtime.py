@@ -107,9 +107,14 @@ async def test_preflight_downloads_every_referenced_recording(
 ) -> None:
     runtime = _runtime(tmp_path)
     seen: list[RecordingCacheEntry] = []
+    sample_bytes = b"\x00" * 8 * 100  # 100 cf32_le samples (2 x 4-byte components each)
 
     async def fake_ensure_cached(cache_dir: Path, entry: RecordingCacheEntry) -> None:
         seen.append(entry)
+        cache.meta_path_for(cache_dir, entry.recording_id, entry.version).write_text(
+            '{"global": {"core:datatype": "cf32_le", "core:sample_rate": 1000000}}'
+        )
+        cache.data_path_for(cache_dir, entry.recording_id, entry.version).write_bytes(sample_bytes)
 
     monkeypatch.setattr(cache, "ensure_cached", fake_ensure_cached)
     entry = RecordingCacheEntry(
@@ -126,6 +131,52 @@ async def test_preflight_downloads_every_referenced_recording(
 
     assert result == {}
     assert seen == [entry]
+
+
+async def test_preflight_builds_iq_recording_from_cached_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real bug this guards against: PREFLIGHT used to pass an empty
+    recordings list to `adapter.preflight()` regardless of what was actually
+    cached, which `MockSDRAdapter` silently tolerates but any real
+    `StreamingSDRAdapter` (X440/AIR7311) rejects (`len(recordings) != 1`).
+    Only surfaced once M10 ran against real hardware for the first time.
+    """
+    runtime = _runtime(tmp_path)
+    received: list[object] = []
+
+    async def fake_preflight(device_id, channel_index, window, recordings) -> None:  # type: ignore[no-untyped-def]
+        received.extend(recordings)
+
+    monkeypatch.setattr(runtime.adapter, "preflight", fake_preflight)
+
+    async def fake_ensure_cached(cache_dir: Path, entry: RecordingCacheEntry) -> None:
+        cache.meta_path_for(cache_dir, entry.recording_id, entry.version).write_text(
+            '{"global": {"core:datatype": "cf32_le", "core:sample_rate": 2000000}}'
+        )
+        cache.data_path_for(cache_dir, entry.recording_id, entry.version).write_bytes(
+            b"\x00" * 8 * 50  # cf32_le = 2 x 4-byte components per sample
+        )
+
+    monkeypatch.setattr(cache, "ensure_cached", fake_ensure_cached)
+    entry = RecordingCacheEntry(
+        recording_id=uuid4(),
+        version=1,
+        metadata_object_key="k.sigmf-meta",
+        data_object_key="k.sigmf-data",
+        sha256_metadata="a" * 64,
+        sha256_data="b" * 64,
+    )
+    command = _command(AgentCommandKind.PREFLIGHT, window=_window(), recordings=[entry])
+
+    await runtime._dispatch(command)
+
+    assert len(received) == 1
+    recording = received[0]
+    assert recording.id == entry.recording_id
+    assert recording.sample_format == "cf32_le"
+    assert recording.sample_rate_hz == 2_000_000.0
+    assert recording.sample_count == 50
 
 
 async def test_watchdog_emergency_stops_an_armed_channel_past_timeout(tmp_path: Path) -> None:

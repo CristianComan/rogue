@@ -1212,13 +1212,29 @@ curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/versions/$VERSION_N
 Expect `default-initial-planning-profile` — the static default, since no
 agent is online.
 
-### Part B — DeepwaveAIR7311Adapter (lab hardware required, unverified here)
+### Part B — DeepwaveAIR7311Adapter (verified 2026-09-08, see caveat below)
 
 The AIR7311 is a Deepwave AIR-T unit: the RF front end is directly attached
 to an embedded NVIDIA Jetson/Orin compute module, which **is** the Agent
 host (ADR-004) — there is no separate PC in between. SoapySDR runs locally
 on that Orin, and only ROGUE's own NATS/S3 traffic crosses the Ethernet
 link to the control plane (ADR-005: no vendor-library remoting).
+
+**Caveat on how this was actually verified:** the specific AIR-T unit used
+here ships Python 3.10.12 (`airstack` OS image), while ROGUE needs 3.11+
+(`datetime.UTC`) and targets 3.12. Rather than reimage the device or rebuild
+its ABI-locked `python3-soapysdr` bindings from source, this pass ran
+`agents.common.main` on the **control-plane host** (Python 3.12) against the
+Orin over `soapyremote-server` (`ROGUE_AIR7311_DEVICE_ARGS=
+"driver=remote,remote=<orin-ip>,remote:driver=SoapyAIRT"`) — an explicit,
+documented, temporary exception to ADR-005 §1, recorded in
+`docs/decisions/ADR-011-temporary-soapyremote-exception-for-m10-verification.md`.
+Steps 1-2 below were run directly on the Orin (unaffected by any of this);
+steps 4-6 were run this way instead of directly on the Orin. **This is not
+the target production deployment shape** — a real Agent host still needs
+native Python 3.12 + matching SoapySDR bindings; see ADR-011 for why this
+was judged an acceptable narrow exception for M10 verification specifically
+(no timing-critical synchronization requirement at stake, unlike M11+).
 
 **1. Confirm SoapySDR sees the device** (already shipped on the AIR-T's
 `airstack` OS image — no separate install needed on Deepwave-provided
@@ -1267,22 +1283,32 @@ attenuation budget before enabling TX. **Start with
 `ROGUE_ENABLE_REAL_TX=0`** and confirm presence/`discover()`/`configure`
 work before ever setting it to `1`.
 
-**4. Start the Agent in `air7311` mode** directly on the Orin (same
-network as the control-plane host — confirm with `ifconfig`/`ip addr` that
-its Ethernet interface, e.g. `eth0`, is reachable from the control-plane
-host's IP on ports 4222/NATS and 9000/MinIO before starting):
+**4. Start the Agent in `air7311` mode.** On a Python 3.12-native Agent host,
+run this directly on the Orin (same network as the control-plane host —
+confirm with `ifconfig`/`ip addr` that its Ethernet interface, e.g. `eth0`,
+is reachable from the control-plane host's IP on ports 4222/NATS and
+9000/MinIO before starting) with `ROGUE_AIR7311_DEVICE_ARGS="driver=
+SoapyAIRT"`. **If the Orin is still Python 3.10 like the unit this was
+verified against**, run the Agent process on the control-plane host instead,
+with `soapyremote-server` running on the Orin (see the ADR-011 caveat
+above):
 
 ```bash
 ROGUE_AGENT_ID=air7311-orin-01 \
 ROGUE_AGENT_MODE=air7311 \
 ROGUE_AGENT_DEVICE_IDS=air7311-1 \
-ROGUE_AIR7311_DEVICE_ARGS="driver=SoapyAIRT" \
+ROGUE_AIR7311_DEVICE_ARGS="driver=remote,remote=<orin-ip>,remote:driver=SoapyAIRT" \
 ROGUE_ENABLE_REAL_TX=0 \
 ROGUE_NATS_URL=nats://<control-server-lab-ip>:4222 \
 ROGUE_S3_ENDPOINT=http://<control-server-lab-ip>:9000 \
 ROGUE_S3_ACCESS_KEY=rogue ROGUE_S3_SECRET_KEY=rogue_dev_password \
 python -m agents.common.main
 ```
+
+(Drop `remote,remote=<orin-ip>,remote:` and use plain `driver=SoapyAIRT` for
+the native-3.12-on-Orin case.) Note SoapyAIRT tolerates only one client
+connection at a time — stop the Agent before running any other SoapySDR
+script against the same device, or connections will time out.
 
 **5. Confirm real discovered capabilities show up in the registry.** Once
 the Orin's Agent process connects, `GET /agents` should show
@@ -1302,6 +1328,23 @@ Watch the spectrum analyzer for the expected signal, then confirm
 `stop`/`emergency-stop` actually cease transmission and that the real-TX
 gate refuses `start` with `ROGUE_ENABLE_REAL_TX` unset — same checks as
 M9, on the AIR7311 path this time.
+
+**Confirmed 2026-09-08** (single-channel scenario, physical 40 dB attenuator
+between the tested channel's TX/RX loopback — see ADR-011's "Outcome"
+section for the full result): `capability_profile.id ==
+"live-agent-registry"`; with `ROGUE_ENABLE_REAL_TX=0`, `start` failed with
+the expected real-TX-not-authorized error after `reserve`/`prefetch_verified`
+/`configure`/`arm` all succeeded; with `ROGUE_ENABLE_REAL_TX=1`, the full
+`reserve -> prefetch_verified -> configure -> arm -> start` cycle succeeded
+and `SoapyRemote` set up and streamed a real TX burst
+(`SoapyRemote::setupTxStream`) to the physical hardware, then `stop`
+completed cleanly. Two real bugs in `agents/common/agent.py`'s PREFLIGHT
+handling were found and fixed in the process — see git history / ADR-011's
+"Outcome" section for detail; they were latent because this dispatch path
+had never previously run against a real (non-`MockSDRAdapter`) adapter.
+Not exercised: a second physical channel (no attenuator was available on
+it this session — real TX was deliberately withheld there), and
+`emergency-stop` specifically (only plain `stop` was exercised).
 
 Report back anything in step 2 that needed adjusting.
 

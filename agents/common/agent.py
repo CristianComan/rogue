@@ -22,7 +22,9 @@ from nats.aio.msg import Msg
 from agents.common import cache
 from agents.common.air7311_adapter import DeepwaveAIR7311Adapter, SoapyDevice
 from agents.common.x440_adapter import EttusX440Adapter, UHDDevice
+from rogue.catalogue.sigmf import bytes_per_sample, parse_metadata
 from rogue.compiler.models import PhysicalTxChannelCapability
+from rogue.domain.recording import IQRecording
 from rogue.execution.adapter import AdapterOperationError, MockSDRAdapter, SDRAdapter
 from rogue.protocol.messages import (
     AgentAck,
@@ -30,9 +32,50 @@ from rogue.protocol.messages import (
     AgentCommandKind,
     AgentPresence,
     AgentTelemetry,
+    RecordingCacheEntry,
 )
 from rogue.protocol.subjects import PRESENCE_SUBJECT, agent_command_subject, agent_telemetry_subject
 from rogue.settings import settings
+
+
+def _load_cached_recording(cache_dir: Path, entry: RecordingCacheEntry) -> IQRecording:
+    """Rebuild the `IQRecording` a real `SDRAdapter.preflight()` needs from
+    what `cache.ensure_cached` already downloaded for this entry.
+
+    `RecordingCacheEntry` (the wire-protocol shape) deliberately omits
+    `sample_format`/`sample_rate_hz`/`sample_count`/`duration_s` — the Agent
+    has no catalogue-database access (ADR-008), so those come from the
+    cached `.sigmf-meta` bytes and the downloaded `.sigmf-data` file size
+    instead of a second round trip to the API.
+    """
+    meta_path = cache.meta_path_for(cache_dir, entry.recording_id, entry.version)
+    data_path = cache.data_path_for(cache_dir, entry.recording_id, entry.version)
+    parsed = parse_metadata(meta_path.read_bytes())
+    if parsed.errors or parsed.sample_rate_hz is None:
+        raise AdapterOperationError(
+            str(entry.recording_id), -1, f"cached SigMF metadata is invalid: {parsed.errors}"
+        )
+    sample_size = bytes_per_sample(parsed.sample_format)
+    if sample_size is None:
+        raise AdapterOperationError(
+            str(entry.recording_id),
+            -1,
+            f"cached SigMF metadata has unsupported core:datatype {parsed.sample_format!r}",
+        )
+    sample_count = data_path.stat().st_size // sample_size
+    return IQRecording(
+        id=entry.recording_id,
+        version=entry.version,
+        metadata_object_key=entry.metadata_object_key,
+        data_object_key=entry.data_object_key,
+        sha256_metadata=entry.sha256_metadata,
+        sha256_data=entry.sha256_data,
+        sample_format=parsed.sample_format,
+        sample_rate_hz=parsed.sample_rate_hz,
+        sample_count=sample_count,
+        duration_s=sample_count / parsed.sample_rate_hz,
+        center_frequency_hz=parsed.center_frequency_hz,
+    )
 
 
 class UnknownAgentModeError(ValueError):
@@ -149,7 +192,10 @@ class AgentRuntime:
             assert command.window is not None
             for entry in command.recordings or []:
                 await cache.ensure_cached(self.cache_dir, entry)
-            await adapter.preflight(device_id, channel_index, command.window, [])
+            recordings = [
+                _load_cached_recording(self.cache_dir, entry) for entry in command.recordings or []
+            ]
+            await adapter.preflight(device_id, channel_index, command.window, recordings)
             return {}
         if kind == AgentCommandKind.CONFIGURE:
             assert command.window is not None

@@ -40,10 +40,20 @@ def data_path_for(cache_dir: Path, recording_id: UUID, version: int) -> Path:
     return cache_dir / f"{recording_id}.v{version}.sigmf-data"
 
 
+def meta_path_for(cache_dir: Path, recording_id: UUID, version: int) -> Path:
+    """The cached ``.sigmf-meta`` path for one recording version.
+
+    Public so the Agent's PREFLIGHT handler can read back the metadata this
+    module already downloaded, to build the ``IQRecording`` a real
+    ``SDRAdapter`` needs (``agents/common/agent.py``).
+    """
+    return cache_dir / f"{recording_id}.v{version}.sigmf-meta"
+
+
 def _paths(cache_dir: Path, entry: RecordingCacheEntry) -> tuple[Path, Path]:
-    stem = f"{entry.recording_id}.v{entry.version}"
     data_path = data_path_for(cache_dir, entry.recording_id, entry.version)
-    return cache_dir / f"{stem}.sigmf-meta", data_path
+    meta_path = meta_path_for(cache_dir, entry.recording_id, entry.version)
+    return meta_path, data_path
 
 
 def _sha256_of_file(path: Path) -> str:

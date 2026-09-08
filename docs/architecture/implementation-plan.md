@@ -19,7 +19,7 @@ Build ROGUE in bounded, testable increments. Do not begin with hardware-specific
 | M7 | Simulated SDR execution | full prepare/arm/start/stop without hardware | Done — `feature/simulate-sdr-execution`, merged to `develop` |
 | M8 | Distributed SDR Agent | leases, cache, protocol, watchdog, telemetry | Done — `feature/distributed-sdr-agent` |
 | M9 | First real adapter | cabled/attenuated replay on one supported device | Code complete, **hardware-unverified** — `feature/x440-real-adapter` (see ADR-009) |
-| M10 | X440 + AIR7311 capability-based scheduling | both hardware families behind common interface | Code complete, **hardware-unverified** — `feature/air7311-and-capability-scheduling` (see ADR-010) |
+| M10 | X440 + AIR7311 capability-based scheduling | both hardware families behind common interface | **AIR7311 side hardware-verified 2026-09-08** (live discovery, `live-agent-registry` scheduling, and a full `reserve->prefetch->configure->arm->start->stop` cycle with real cabled/attenuated TX — see ADR-010, ADR-011); X440 side still **code complete, hardware-unverified** — `feature/air7311-and-capability-scheduling` |
 | M11 | Multi-SDR synchronization | declared timing class demonstrated and measured | Planned |
 | M12 | Doppler/delay/phase processing | receiver-specific streams validated | Planned |
 | M13 | TDOA/AOA receiver stimulation | relative delay/phase requirements demonstrated | Planned |
