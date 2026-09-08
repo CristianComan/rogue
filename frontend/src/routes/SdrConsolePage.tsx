@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { listAgents, type SDRAgentRecord } from "../api/agents";
 import { AgentCard } from "../components/console/AgentCard";
-import { colors, sectionHeadingStyle } from "../styles/tokens";
+import { AppShell } from "../components/shell/AppShell";
+import { Card } from "../components/shell/Card";
 
 /**
  * Runtime hardware inventory, independent of any single scenario draft —
@@ -15,7 +15,6 @@ import { colors, sectionHeadingStyle } from "../styles/tokens";
  * agent on demand (tracked as a follow-up, not faked here).
  */
 export function SdrConsolePage() {
-  const navigate = useNavigate();
   const [agents, setAgents] = useState<SDRAgentRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -31,32 +30,96 @@ export function SdrConsolePage() {
 
   useEffect(refresh, [refresh]);
 
+  const onlineCount = agents.filter((a) => a.status === "online").length;
+
   return (
-    <div style={{ padding: 16, maxWidth: 900, margin: "0 auto" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-        <button type="button" onClick={() => navigate("/")}>
-          ← Library
-        </button>
-        <h1 style={{ fontSize: 18, margin: 0 }}>SDR Console</h1>
-        <button
-          type="button"
-          onClick={refresh}
-          disabled={refreshing}
-          style={{ marginLeft: "auto" }}
-        >
+    <AppShell
+      breadcrumb={[{ label: "Scenario Library", to: "/" }, { label: "SDR Console" }]}
+      actions={
+        <button type="button" data-variant="primary" onClick={refresh} disabled={refreshing}>
           {refreshing ? "Testing connections…" : "Test connections (refresh)"}
         </button>
-      </div>
-      <div style={{ ...sectionHeadingStyle, marginBottom: 8 }}>Agents</div>
-      {error && <div style={{ color: colors.severity.blocking, marginBottom: 12 }}>{error}</div>}
-      {!error && agents.length === 0 && (
-        <div style={{ color: colors.textMuted, fontSize: 13 }}>
-          No agents have reported presence to the control plane.
+      }
+    >
+      <div
+        style={{
+          padding: 20,
+          maxWidth: 1000,
+          margin: "0 auto",
+          display: "flex",
+          flexDirection: "column",
+          gap: 16,
+        }}
+      >
+        <div style={{ display: "flex", gap: 12 }}>
+          <StatTile label="Agents online" value={`${onlineCount} / ${agents.length}`} />
+          <StatTile
+            label="Total channels"
+            value={String(agents.reduce((sum, a) => sum + a.capabilities.length, 0))}
+          />
         </div>
-      )}
-      {agents.map((agent) => (
-        <AgentCard key={agent.agent_id} agent={agent} />
-      ))}
+
+        {error && (
+          <div
+            style={{
+              padding: "8px 12px",
+              background: "var(--status-danger-bg)",
+              color: "var(--status-danger)",
+              borderRadius: "var(--radius)",
+              fontSize: 13,
+            }}
+          >
+            {error}
+          </div>
+        )}
+
+        <Card title="Agents" noPadding>
+          {!error && agents.length === 0 && (
+            <div
+              style={{
+                padding: 20,
+                color: "var(--text-tertiary)",
+                fontSize: 13,
+                textAlign: "center",
+              }}
+            >
+              No agents have reported presence to the control plane.
+            </div>
+          )}
+          <div style={{ padding: agents.length > 0 ? 12 : 0 }}>
+            {agents.map((agent) => (
+              <AgentCard key={agent.agent_id} agent={agent} />
+            ))}
+          </div>
+        </Card>
+      </div>
+    </AppShell>
+  );
+}
+
+function StatTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        background: "var(--surface-card)",
+        border: "1px solid var(--border-default)",
+        borderRadius: "var(--radius)",
+        padding: "10px 16px",
+        minWidth: 140,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+          color: "var(--text-secondary)",
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ fontSize: 20, fontWeight: 600, marginTop: 2 }}>{value}</div>
     </div>
   );
 }

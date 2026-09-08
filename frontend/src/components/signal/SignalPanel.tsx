@@ -2,7 +2,7 @@ import { SpectrumStrip } from "../timeline/SpectrumStrip";
 import { Waterfall } from "../timeline/Waterfall";
 import type { DroneMission, IQRecording } from "../../domain/types";
 import type { Selection } from "../../state/selection";
-import { sectionHeadingStyle } from "../../styles/tokens";
+import { Card } from "../shell/Card";
 import { SignalLinksListEditor } from "./SignalLinksListEditor";
 
 /**
@@ -27,8 +27,12 @@ export function SignalPanel({
   catalogue: IQRecording[];
 }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column" }}>
-      <div style={{ ...sectionHeadingStyle, padding: "8px 12px 4px" }}>Signal Knowledge</div>
+    <Card
+      title="Signal Knowledge"
+      noPadding
+      style={{ height: "100%" }}
+      bodyStyle={{ overflowY: "auto" }}
+    >
       <SignalLinksListEditor
         missions={missions}
         scenarioTimeSeconds={scenarioTimeSeconds}
@@ -43,6 +47,6 @@ export function SignalPanel({
           )),
         )}
       </div>
-    </div>
+    </Card>
   );
 }

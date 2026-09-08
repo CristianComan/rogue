@@ -1,10 +1,6 @@
 import { useState } from "react";
 import type { SDRAgentRecord } from "../../api/agents";
-import { colors, monoFontStack, sectionHeadingStyle } from "../../styles/tokens";
-
-function statusColor(status: SDRAgentRecord["status"]): string {
-  return status === "online" ? colors.status.online : colors.status.stale;
-}
+import { Badge } from "../shell/Badge";
 
 function ghz(range: [number, number]): string {
   return `${(range[0] / 1e9).toFixed(2)}–${(range[1] / 1e9).toFixed(2)} GHz`;
@@ -16,7 +12,12 @@ export function AgentCard({ agent }: { agent: SDRAgentRecord }) {
   return (
     <div
       data-testid={`agent-card-${agent.agent_id}`}
-      style={{ border: `1px solid ${colors.border}`, borderRadius: 4, marginBottom: 8 }}
+      style={{
+        border: "1px solid var(--border-default)",
+        borderRadius: "var(--radius)",
+        marginBottom: 8,
+        background: "var(--surface-card)",
+      }}
     >
       <button
         type="button"
@@ -31,59 +32,44 @@ export function AgentCard({ agent }: { agent: SDRAgentRecord }) {
           border: "none",
           textAlign: "left",
           cursor: "pointer",
-          fontFamily: monoFontStack,
+          fontFamily: "var(--font-mono)",
         }}
       >
-        <span
-          aria-hidden
-          style={{
-            width: 8,
-            height: 8,
-            borderRadius: "50%",
-            background: statusColor(agent.status),
-            flex: "0 0 auto",
-          }}
-        />
-        <strong style={{ fontSize: 13 }}>{agent.agent_id}</strong>
-        <span style={{ fontSize: 12, color: colors.textMuted }}>{agent.mode}</span>
-        <span
-          style={{
-            fontSize: 11,
-            textTransform: "uppercase",
-            letterSpacing: "0.04em",
-            color: statusColor(agent.status),
-            marginLeft: "auto",
-          }}
-        >
-          {agent.status}
-        </span>
-        <span style={{ fontSize: 11, color: colors.textMuted }}>
+        <strong style={{ fontSize: 13, fontFamily: "inherit" }}>{agent.agent_id}</strong>
+        <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>{agent.mode}</span>
+        <Badge tone={agent.status === "online" ? "success" : "warning"}>{agent.status}</Badge>
+        <span style={{ fontSize: 11, color: "var(--text-secondary)", marginLeft: "auto" }}>
           {agent.capabilities.length} ch
         </span>
+        <span aria-hidden style={{ fontSize: 11, color: "var(--text-tertiary)" }}>
+          {expanded ? "▲" : "▼"}
+        </span>
       </button>
-      <div style={{ padding: "0 12px 4px", fontSize: 11, color: colors.textMuted }}>
+      <div style={{ padding: "0 12px 8px", fontSize: 11, color: "var(--text-tertiary)" }}>
         last seen {new Date(agent.last_seen_at).toLocaleString()}
       </div>
       {expanded && (
         <table
           style={{
             width: "100%",
-            borderCollapse: "collapse",
             fontSize: 12,
-            fontFamily: monoFontStack,
+            fontFamily: "var(--font-mono)",
           }}
         >
           <thead>
-            <tr style={{ borderTop: `1px solid ${colors.borderLight}` }}>
+            <tr style={{ borderTop: "1px solid var(--border-subtle)" }}>
               {["Channel", "Device", "Family", "Tunable range", "Max BW", "Max sample rate"].map(
                 (h) => (
                   <th
                     key={h}
                     style={{
-                      ...sectionHeadingStyle,
                       textAlign: "left",
                       padding: "4px 8px",
+                      fontSize: 11,
                       fontWeight: 600,
+                      letterSpacing: "0.04em",
+                      textTransform: "uppercase",
+                      color: "var(--text-secondary)",
                     }}
                   >
                     {h}

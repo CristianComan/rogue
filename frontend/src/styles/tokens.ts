@@ -1,32 +1,34 @@
 /**
- * Shared visual constants for the badges/tables introduced across the
- * Spatial/Signal/Replay/Console views — kept as plain values (not a CSS
- * framework) to match this codebase's existing inline-style convention.
+ * Thin re-export of index.css's design tokens for use in inline style
+ * objects (React style props can't reference CSS custom properties by
+ * name directly the way a stylesheet rule can, but `var(--x)` as a string
+ * value works fine) — one source of truth in the CSS file, this module
+ * just names them for TypeScript call sites.
  */
 
 import type { CSSProperties } from "react";
 
 export const colors = {
-  border: "#ccc",
-  borderLight: "#eee",
-  textMuted: "#4c5c5e",
-  panelHeading: "#2f3a3c",
-  selectedBg: "#e4ebe8",
-  monoBg: "#f5f7f6",
+  border: "var(--border-default)",
+  borderLight: "var(--border-subtle)",
+  textMuted: "var(--text-secondary)",
+  panelHeading: "var(--text-secondary)",
+  selectedBg: "var(--surface-selected)",
+  monoBg: "var(--surface-sunken)",
   severity: {
-    info: "#3568b0",
-    warning: "#b8790e",
-    blocking: "#b3261e",
-    critical: "#b3261e",
+    info: "var(--status-info)",
+    warning: "var(--status-warning)",
+    blocking: "var(--status-danger)",
+    critical: "var(--status-danger)",
   },
   status: {
-    online: "#1e8e3e",
-    stale: "#b8790e",
-    offline: "#8a8f8c",
+    online: "var(--status-success)",
+    stale: "var(--status-warning)",
+    offline: "var(--status-neutral)",
   },
 } as const;
 
-export const monoFontStack = "ui-monospace, SFMono-Regular, 'Cascadia Code', Consolas, monospace";
+export const monoFontStack = "var(--font-mono)";
 
 export const sectionHeadingStyle: CSSProperties = {
   fontSize: 11,

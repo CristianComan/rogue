@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { listRecordings } from "../api/recordings";
 import { getReplayPlan } from "../api/replay";
 import { getVersion } from "../api/scenarios";
@@ -8,10 +8,11 @@ import { RunControls } from "../components/replay/RunControls";
 import { RunHeader } from "../components/replay/RunHeader";
 import { WatchdogFeed } from "../components/replay/WatchdogFeed";
 import { MapCanvas } from "../components/map/MapCanvas";
+import { AppShell } from "../components/shell/AppShell";
+import { Card } from "../components/shell/Card";
 import type { ReplayPlan } from "../domain/replay";
 import type { IQRecording, ScenarioVersion } from "../domain/types";
 import { RunTimeProvider, useRunTime } from "../state/runTimeContext";
-import { colors } from "../styles/tokens";
 
 /**
  * The Replay page: live/replayed drone position on the map (driven by run
@@ -28,7 +29,6 @@ export function ReplayPage() {
     planId: string;
     runId: string;
   }>();
-  const navigate = useNavigate();
   const [plan, setPlan] = useState<ReplayPlan | null>(null);
   const [version, setVersion] = useState<ScenarioVersion | null>(null);
   const [catalogue, setCatalogue] = useState<IQRecording[]>([]);
@@ -61,29 +61,41 @@ export function ReplayPage() {
   if (!scenarioId || !planId || !runId) return null;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <div
-        style={{ padding: 8, borderBottom: `1px solid ${colors.border}`, display: "flex", gap: 12 }}
-      >
-        <button type="button" onClick={() => navigate(`/scenarios/${scenarioId}/replay`)}>
-          ← Runs
-        </button>
-        <strong>ROGUE Replay</strong>
-        {error && <span style={{ color: colors.severity.critical }}>{error}</span>}
+    <AppShell
+      scroll={false}
+      breadcrumb={[
+        { label: "Scenario Library", to: "/" },
+        { label: "Runs", to: `/scenarios/${scenarioId}/replay` },
+        { label: `Run ${runId.slice(0, 8)}` },
+      ]}
+    >
+      <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+        {error && (
+          <div
+            style={{
+              padding: "8px 20px",
+              background: "var(--status-danger-bg)",
+              color: "var(--status-danger)",
+              fontSize: 13,
+            }}
+          >
+            {error}
+          </div>
+        )}
+        {plan && version && (
+          <RunTimeProvider scenarioId={scenarioId} planId={planId} runId={runId}>
+            <ReplayPageBody
+              plan={plan}
+              version={version}
+              catalogue={catalogue}
+              scenarioId={scenarioId}
+              planId={planId}
+              runId={runId}
+            />
+          </RunTimeProvider>
+        )}
       </div>
-      {plan && version && (
-        <RunTimeProvider scenarioId={scenarioId} planId={planId} runId={runId}>
-          <ReplayPageBody
-            plan={plan}
-            version={version}
-            catalogue={catalogue}
-            scenarioId={scenarioId}
-            planId={planId}
-            runId={runId}
-          />
-        </RunTimeProvider>
-      )}
-    </div>
+    </AppShell>
   );
 }
 
@@ -105,26 +117,49 @@ function ReplayPageBody({
   const { runElapsedSeconds } = useRunTime();
 
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
-      <RunHeader />
-      <RunControls scenarioId={scenarioId} planId={planId} runId={runId} />
-      <div style={{ flex: "1 1 55%", display: "flex", minHeight: 0 }}>
-        <div style={{ flex: "1 1 55%", minWidth: 0 }}>
-          <MapCanvas
-            zones={version.zones}
-            missions={version.missions}
-            receivers={version.receivers}
-            scenarioTimeSeconds={runElapsedSeconds}
-          />
+    <div
+      style={{
+        flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
+        padding: "var(--space-2)",
+        gap: "var(--space-2)",
+      }}
+    >
+      <Card noPadding>
+        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap" }}>
+          <RunHeader />
+          <div style={{ marginLeft: "auto", paddingRight: 12 }}>
+            <RunControls scenarioId={scenarioId} planId={planId} runId={runId} />
+          </div>
         </div>
-        <div
-          style={{ flex: "1 1 45%", overflowY: "auto", borderLeft: `1px solid ${colors.border}` }}
-        >
-          <ChannelWaterfallGrid plan={plan} catalogue={catalogue} />
+      </Card>
+      <div style={{ flex: "1 1 55%", display: "flex", gap: "var(--space-2)", minHeight: 0 }}>
+        <div style={{ flex: "1 1 55%", minWidth: 0 }}>
+          <Card title="Live position" noPadding style={{ height: "100%" }}>
+            <MapCanvas
+              zones={version.zones}
+              missions={version.missions}
+              receivers={version.receivers}
+              scenarioTimeSeconds={runElapsedSeconds}
+            />
+          </Card>
+        </div>
+        <div style={{ flex: "1 1 45%", minWidth: 0 }}>
+          <Card
+            noPadding
+            style={{ height: "100%" }}
+            bodyStyle={{ overflowY: "auto", height: "100%" }}
+          >
+            <ChannelWaterfallGrid plan={plan} catalogue={catalogue} />
+          </Card>
         </div>
       </div>
-      <div style={{ flex: "0 0 auto", borderTop: `1px solid ${colors.border}` }}>
-        <WatchdogFeed />
+      <div style={{ flex: "0 0 auto" }}>
+        <Card noPadding>
+          <WatchdogFeed />
+        </Card>
       </div>
     </div>
   );

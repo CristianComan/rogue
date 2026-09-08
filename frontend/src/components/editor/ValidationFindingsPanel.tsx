@@ -38,17 +38,21 @@ export function ValidationFindingsPanel({
   onSelectPath,
 }: ValidationFindingsPanelProps) {
   if (findings.length === 0) {
-    return <div style={{ padding: 8, fontSize: 12, color: "#2c7a63" }}>No findings.</div>;
+    return (
+      <div style={{ padding: "6px 0", fontSize: 12, color: "var(--status-success)" }}>
+        No findings.
+      </div>
+    );
   }
 
   const blocking = findings.filter((f) => f.severity === "blocking");
   const warnings = findings.filter((f) => f.severity === "warning");
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: 8 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "6px 0" }}>
       {blocking.length > 0 && (
         <div>
-          <div style={{ fontSize: 11, fontWeight: 600, color: "#a3311f" }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: "var(--status-danger)" }}>
             Blocking ({blocking.length})
           </div>
           {blocking.map((f, i) => (
@@ -62,7 +66,7 @@ export function ValidationFindingsPanel({
       )}
       {warnings.length > 0 && (
         <div>
-          <div style={{ fontSize: 11, fontWeight: 600, color: "#a34b1f" }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: "var(--status-warning)" }}>
             Warnings ({warnings.length})
           </div>
           {warnings.map((f, i) => (
@@ -89,13 +93,14 @@ function FindingRow({ finding, onClick }: { finding: ValidationFinding; onClick:
         textAlign: "left",
         fontSize: 12,
         padding: "4px 6px",
-        border: "1px solid #eee",
+        border: "1px solid var(--border-subtle)",
         background: "none",
         cursor: "pointer",
       }}
       title={finding.path}
     >
-      <code style={{ fontSize: 10 }}>{finding.code}</code>: {finding.message}
+      <code style={{ fontSize: 10, fontFamily: "var(--font-mono)" }}>{finding.code}</code>:{" "}
+      {finding.message}
     </button>
   );
 }

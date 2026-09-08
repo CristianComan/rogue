@@ -2,9 +2,23 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { listReplayPlans } from "../api/replay";
 import { createRun, listRuns } from "../api/runs";
+import { AppShell } from "../components/shell/AppShell";
+import { Badge, type BadgeTone } from "../components/shell/Badge";
+import { Card } from "../components/shell/Card";
 import type { ReplayPlan } from "../domain/replay";
-import type { ScenarioRun } from "../domain/run";
-import { colors, monoFontStack, sectionHeadingStyle } from "../styles/tokens";
+import type { RunStatus, ScenarioRun } from "../domain/run";
+
+const RUN_STATUS_TONE: Record<RunStatus, BadgeTone> = {
+  created: "neutral",
+  preparing: "info",
+  prepared: "info",
+  armed: "warning",
+  running: "success",
+  stopping: "warning",
+  stopped: "neutral",
+  failed: "danger",
+  emergency_stopped: "danger",
+};
 
 /**
  * Lightweight chooser between the Development page and the live Replay
@@ -52,80 +66,121 @@ export function ReplayPlansPage() {
   if (!scenarioId) return null;
 
   return (
-    <div style={{ padding: 16, maxWidth: 900, margin: "0 auto" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-        <button type="button" onClick={() => navigate(`/scenarios/${scenarioId}`)}>
-          ← Editor
-        </button>
-        <h1 style={{ fontSize: 18, margin: 0 }}>Replay plans</h1>
-      </div>
-      {error && <div style={{ color: colors.severity.critical, marginBottom: 12 }}>{error}</div>}
-      {plans.length === 0 && !error && (
-        <div style={{ color: colors.textMuted, fontSize: 13 }}>
-          No compiled Replay Plans for this scenario yet. Compile a published version first.
-        </div>
-      )}
-      {plans.map((plan) => (
-        <div
-          key={plan.id}
-          style={{
-            border: `1px solid ${colors.border}`,
-            borderRadius: 4,
-            marginBottom: 12,
-            padding: 12,
-          }}
-        >
+    <AppShell
+      breadcrumb={[
+        { label: "Scenario Library", to: "/" },
+        { label: "Scenario", to: `/scenarios/${scenarioId}` },
+        { label: "Replay plans" },
+      ]}
+    >
+      <div
+        style={{
+          padding: 20,
+          maxWidth: 1000,
+          margin: "0 auto",
+          display: "flex",
+          flexDirection: "column",
+          gap: 16,
+        }}
+      >
+        {error && (
           <div
-            style={{ display: "flex", alignItems: "center", gap: 12, fontFamily: monoFontStack }}
+            style={{
+              padding: "8px 12px",
+              background: "var(--status-danger-bg)",
+              color: "var(--status-danger)",
+              borderRadius: "var(--radius)",
+              fontSize: 13,
+            }}
           >
-            <strong style={{ fontSize: 13 }}>{plan.id}</strong>
-            <span style={{ fontSize: 12, color: colors.textMuted }}>
-              v{plan.scenario_version_number} · compiled{" "}
-              {new Date(plan.compiled_at).toLocaleString()}
-            </span>
-            <button type="button" onClick={() => loadRuns(plan.id)} style={{ marginLeft: "auto" }}>
-              Show runs
-            </button>
-            <button
-              type="button"
-              disabled={creating === plan.id}
-              onClick={() => handleCreateRun(plan.id)}
-            >
-              {creating === plan.id ? "Creating…" : "Create run"}
-            </button>
+            {error}
           </div>
-          {runsByPlan[plan.id] && (
-            <div style={{ marginTop: 8 }}>
-              <div style={sectionHeadingStyle}>Runs</div>
-              {runsByPlan[plan.id].length === 0 && (
-                <div style={{ fontSize: 12, color: colors.textMuted }}>No runs yet.</div>
-              )}
-              {runsByPlan[plan.id].map((run) => (
-                <button
-                  key={run.id}
-                  type="button"
-                  onClick={() =>
-                    navigate(`/scenarios/${scenarioId}/replay-plans/${plan.id}/runs/${run.id}`)
-                  }
+        )}
+        {plans.length === 0 && !error && (
+          <Card>
+            <div style={{ color: "var(--text-tertiary)", fontSize: 13, textAlign: "center" }}>
+              No compiled Replay Plans for this scenario yet. Compile a published version first.
+            </div>
+          </Card>
+        )}
+        {plans.map((plan) => (
+          <Card
+            key={plan.id}
+            noPadding
+            header={
+              <>
+                <strong style={{ fontSize: 13, fontFamily: "var(--font-mono)", fontWeight: 600 }}>
+                  {plan.id.slice(0, 8)}
+                </strong>
+                <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                  v{plan.scenario_version_number} · compiled{" "}
+                  {new Date(plan.compiled_at).toLocaleString()}
+                </span>
+                <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                  <button type="button" onClick={() => loadRuns(plan.id)}>
+                    Show runs
+                  </button>
+                  <button
+                    type="button"
+                    data-variant="primary"
+                    disabled={creating === plan.id}
+                    onClick={() => handleCreateRun(plan.id)}
+                  >
+                    {creating === plan.id ? "Creating…" : "Create run"}
+                  </button>
+                </div>
+              </>
+            }
+          >
+            {runsByPlan[plan.id] && (
+              <div style={{ padding: 12 }}>
+                <div
                   style={{
-                    display: "block",
-                    width: "100%",
-                    textAlign: "left",
-                    fontFamily: monoFontStack,
-                    fontSize: 12,
-                    padding: "4px 8px",
-                    border: `1px solid ${colors.borderLight}`,
-                    marginBottom: 4,
-                    cursor: "pointer",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    letterSpacing: "0.06em",
+                    textTransform: "uppercase",
+                    color: "var(--text-secondary)",
+                    marginBottom: 6,
                   }}
                 >
-                  {run.id} · {run.status} · {run.operator}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
+                  Runs
+                </div>
+                {runsByPlan[plan.id].length === 0 && (
+                  <div style={{ fontSize: 12, color: "var(--text-tertiary)" }}>No runs yet.</div>
+                )}
+                {runsByPlan[plan.id].map((run) => (
+                  <button
+                    key={run.id}
+                    type="button"
+                    onClick={() =>
+                      navigate(`/scenarios/${scenarioId}/replay-plans/${plan.id}/runs/${run.id}`)
+                    }
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      width: "100%",
+                      textAlign: "left",
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 12,
+                      padding: "6px 10px",
+                      border: "1px solid var(--border-subtle)",
+                      marginBottom: 4,
+                    }}
+                  >
+                    <span>{run.id.slice(0, 8)}</span>
+                    <Badge tone={RUN_STATUS_TONE[run.status]}>{run.status}</Badge>
+                    <span style={{ color: "var(--text-secondary)", marginLeft: "auto" }}>
+                      {run.operator}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </Card>
+        ))}
+      </div>
+    </AppShell>
   );
 }

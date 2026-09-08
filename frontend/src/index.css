@@ -1,14 +1,75 @@
+/*
+ * ROGUE design tokens — an Azure Portal-influenced visual language: a dark
+ * left icon nav rail, a light content canvas with white cards, dense
+ * tables, small-caps section labels, and a subtle-border/flat-shadow
+ * aesthetic (no drop shadows, no rounded-pill buttons). Light theme only —
+ * the app has no theme toggle, so `color-scheme: light dark` below is just
+ * form-control tinting, not a real dark mode.
+ */
 :root {
   color-scheme: light dark;
   font:
-    14px/1.4 system-ui,
-    "Segoe UI",
+    14px/1.4 "Segoe UI",
+    system-ui,
     Roboto,
     sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* Surfaces */
+  --surface-canvas: #faf9f8;
+  --surface-card: #ffffff;
+  --surface-sunken: #f3f2f1;
+  --surface-nav: #131b2c;
+  --surface-nav-hover: #1f2b42;
+  --surface-nav-active: #0f6cbd;
+  --surface-selected: #eaf1fb;
+  --surface-overlay: rgba(15, 20, 30, 0.45);
+
+  /* Borders */
+  --border-default: #d8d6d3;
+  --border-subtle: #e8e6e3;
+  --border-strong: #b6b3af;
+
+  /* Text */
+  --text-primary: #1a1a1a;
+  --text-secondary: #5c5c5c;
+  --text-tertiary: #8a8886;
+  --text-on-accent: #ffffff;
+  --text-on-nav: #d3d8e0;
+  --text-on-nav-muted: #8b93a5;
+
+  /* Accent */
+  --accent: #0f6cbd;
+  --accent-hover: #115ea3;
+  --accent-text: #0f6cbd;
+
+  /* Status */
+  --status-success: #0e7a3d;
+  --status-success-bg: #e6f4ea;
+  --status-warning: #8a5700;
+  --status-warning-bg: #fff4ce;
+  --status-danger: #b3261e;
+  --status-danger-bg: #fdeeee;
+  --status-info: #0f6cbd;
+  --status-info-bg: #eaf1fb;
+  --status-neutral: #605e5c;
+  --status-neutral-bg: #f3f2f1;
+
+  /* Spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* Type */
+  --font-mono: ui-monospace, SFMono-Regular, "Cascadia Code", Consolas, monospace;
+  --radius: 4px;
+  --nav-width: 52px;
 }
 
 /* This is an application shell, not a scrolling document: html/body/#root
@@ -25,6 +86,74 @@ body,
 
 body {
   overflow: hidden;
+  background: var(--surface-canvas);
+  color: var(--text-primary);
+}
+
+/* Flat, subtle-border Azure-Portal-ish control baseline. Components that
+   need a stronger/weaker/danger variant apply data-variant on top. */
+button {
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--surface-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--surface-sunken);
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+button[data-variant="primary"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-on-accent);
+}
+button[data-variant="primary"]:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+button[data-variant="danger"] {
+  background: var(--status-danger);
+  border-color: var(--status-danger);
+  color: var(--text-on-accent);
+  font-weight: 600;
+  border-radius: 2px;
+}
+button[data-variant="danger"]:hover:not(:disabled) {
+  background: #921f19;
+  border-color: #921f19;
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--surface-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  padding: 5px 8px;
+}
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+a {
+  color: var(--accent-text);
+}
+
+table {
+  border-collapse: collapse;
 }
 
 /* Browsers default <fieldset> to min-width: min-content, which refuses to
