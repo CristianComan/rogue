@@ -16,10 +16,10 @@ Build ROGUE in bounded, testable increments. Do not begin with hardware-specific
 | M5 | RF spectrum planner | deterministic spectrum state and conflict/headroom findings | Done — `feature/rf-spectrum-planner`, merged to `develop` |
 | — | Recording schedule + spectrum waterfall | per-platform recording/background/silence scheduling, real spectrogram preview | Done — `feature/recording-schedule-waterfall`, merged to `develop` (supplemental; not in the original CLAUDE.md M-sequence, added by direct request) |
 | M6 | Replay Plan compiler | scenario compiles to hardware-neutral executable plan | Done — `feature/replay-plan-compile`, merged to `develop` |
-| M7 | Simulated SDR execution | full prepare/arm/start/stop without hardware | Done — `feature/simulate-sdr-execution` |
-| M8 | Distributed SDR Agent | leases, cache, protocol, watchdog, telemetry | Planned |
-| M9 | First real adapter | cabled/attenuated replay on one supported device | Planned |
-| M10 | X440 + AIR7311 capability-based scheduling | both hardware families behind common interface | Planned |
+| M7 | Simulated SDR execution | full prepare/arm/start/stop without hardware | Done — `feature/simulate-sdr-execution`, merged to `develop` |
+| M8 | Distributed SDR Agent | leases, cache, protocol, watchdog, telemetry | Done — `feature/distributed-sdr-agent` |
+| M9 | First real adapter | cabled/attenuated replay on one supported device | Code complete, **hardware-unverified** — `feature/x440-real-adapter` (see ADR-009) |
+| M10 | X440 + AIR7311 capability-based scheduling | both hardware families behind common interface | **AIR7311 side hardware-verified 2026-09-08** (live discovery, `live-agent-registry` scheduling, and a full `reserve->prefetch->configure->arm->start->stop` cycle with real cabled/attenuated TX — see ADR-010, ADR-011); X440 side still **code complete, hardware-unverified** — `feature/air7311-and-capability-scheduling` |
 | M11 | Multi-SDR synchronization | declared timing class demonstrated and measured | Planned |
 | M12 | Doppler/delay/phase processing | receiver-specific streams validated | Planned |
 | M13 | TDOA/AOA receiver stimulation | relative delay/phase requirements demonstrated | Planned |
@@ -228,6 +228,186 @@ test_runs.py`. Manually verified end-to-end against a live server: compile
 a plan, walk create→arm→start→stop via curl with `GET .../runs/{id}`
 confirming a strictly growing event list at each step, and a separate
 emergency-stop mid-`running` reaching `emergency_stopped`.
+
+### M8 — Distributed SDR Agent (done)
+
+Branch `feature/distributed-sdr-agent`, based on `develop` after M7. See
+ADR-008 for the full scope/exclusions record; summary below.
+
+New `backend/rogue/protocol/` package (`messages.py`, `subjects.py`): versioned
+`AgentCommand`/`AgentAck`/`AgentPresence`/`AgentTelemetry`/`RecordingCacheEntry`
+NATS message shapes, each carrying `schema_version`/correlation ID/sequence/
+timestamp per `sdr-architecture.md` §4 — reuses `AdapterDeviceStatus` and
+`DeviceLease` rather than redefining them. Lives under `backend/rogue`, not a
+new top-level `schemas/` package, since the Agent image already installs the
+full `rogue` package.
+
+`DeviceLease` gained `expires_at`; `SDRAdapter.reserve` takes a `ttl_seconds`
+and a new `SDRAdapter.renew` extends it. `rogue.execution.orchestrator` gained
+`renew_leases` and a new `AdapterOperationError` base that
+`SimulatedDeviceFailureError` now inherits from, so a remote Agent's
+`AgentUnreachableError` (`rogue.execution.remote_adapter`) fails a run through
+the exact same existing per-step exception handling — no new orchestrator
+branches needed for a second `SDRAdapter` implementation.
+
+`rogue.execution.remote_adapter.RemoteAgentAdapter` implements `SDRAdapter`
+over NATS request-reply to a device's owning Agent (looked up via a new
+presence-driven registry, `rogue.persistence.agents` / `rogue.domain.agent.
+SDRAgentRecord`, exposed as `GET /agents`/`GET /agents/{agent_id}`).
+`rogue.persistence.run` picks between an in-process `MockSDRAdapter` (default,
+what every unit test exercises unchanged) and this remote adapter via
+`settings.agent_dispatch_mode` (`ROGUE_AGENT_DISPATCH_MODE`) — a deployment-
+topology setting, not a version fork.
+
+Central lease enforcement (`rogue.execution.lease_sweep`, started from a new
+FastAPI lifespan in `rogue.execution.lifespan`) renews every ARMED/RUNNING
+run's leases on a short interval and emergency-stops one whose lease lapsed
+or failed to renew — CLAUDE.md rule 12's *central* half. `agents/common/
+agent.py`'s new `AgentRuntime` is the *local* half: an independent watchdog
+that emergency-stops its own adapter if a channel stays armed/transmitting
+past a timeout with no control-plane contact, regardless of whether the
+control plane itself is reachable. `agents/common/cache.py` gives each Agent
+a real local SigMF cache — downloads and hash-verifies `.sigmf-meta`/
+`.sigmf-data` from MinIO during `PREFLIGHT` via a new `rogue.storage.
+object_store.stream_object_to_file` (bounded, disk-streaming — the existing
+`get_object_bytes` must not be used for a large `.sigmf-data` object).
+`SDRAdapter.preflight` gained a `recordings` parameter (the plan's full
+`recording_manifest`, resolved to `IQRecording`s) to carry this through; the
+compiled `ReplayPlan` has no finer per-channel recording linkage than that
+today (a compiler-side gap noted as a follow-up, not fabricated here).
+
+docker-compose.yml now runs **two** simulated Agent instances
+(`simulated-agent-1`/`simulated-agent-2`, `ROGUE_AGENT_DEVICE_IDS` giving each
+a disjoint device slice) instead of one, so the device_id→agent_id registry
+routing is actually exercised end-to-end rather than always resolving to the
+only agent that exists; `api` sets `ROGUE_AGENT_DISPATCH_MODE=distributed`.
+
+Also fixed, while building this: `POST .../runs/{id}/emergency-stop`
+(`rogue.api.runs`) never called `session.commit()`, unlike every other
+mutating run endpoint — under a real pooled connection (not the test
+fixtures' shared-transaction setup, which masked it) the emergency-stop
+status change would roll back when the connection returned to the pool and
+never actually persist. Found because M8's lease-sweep calls this same
+function and depends on it durably persisting.
+
+Backend test suite grew from 254 to 288 tests: `tests/unit/protocol/`,
+`tests/unit/agents/` (new — `AgentRuntime` dispatch/watchdog/cache, no
+`__init__.py`, matching this repo's per-directory pytest import convention),
+extensions to `tests/unit/execution/test_{adapter,orchestrator}.py`, a new
+`tests/unit/execution/test_remote_adapter.py` (fake NATS transport, no real
+broker — matches CLAUDE.md §10's simulation default), a `@pytest.mark.nats`
+integration test (`test_distributed_integration.py`, skips itself if no
+broker is reachable) that proves the wire format round-trips over a real
+NATS connection, `tests/unit/persistence/test_agent_registry.py` and
+`test_lease_sweep.py`, and `tests/unit/api/test_agents.py`. Manually verified
+against the full `docker compose up` stack: compiled a plan, walked
+create→arm→start→running with the lease-sweep visibly renewing over real
+NATS round trips, then killed the owning `simulated-agent-1` container
+mid-`RUNNING` and confirmed the central sweep reached `EMERGENCY_STOPPED`
+(recording the agent-unreachable errors, since the physical stop command
+itself couldn't be delivered to a dead process — exactly the scenario the
+Agent-side local watchdog exists to cover independently).
+
+Explicitly out of scope (ADR-008): real vendor adapters (unchanged, M9/M10),
+timing sync beyond L1, persisted telemetry history, NATS auth/TLS, and a
+live per-request device-discovery endpoint beyond the presence-driven
+registry.
+
+### M9 — First real adapter (code complete, hardware-unverified)
+
+Branch `feature/x440-real-adapter`, based on `feature/distributed-sdr-agent`
+after M8. See ADR-009 for the full scope record — summary below.
+
+**This environment has no UHD/SoapySDR packages and no physical hardware
+attached**, so unlike every prior milestone this one's exit criterion
+(actual cabled/attenuated replay) was *not* met here. What was built and
+verified in software: `agents/common/x440_adapter.py`'s `EttusX440Adapter`
+implements `SDRAdapter` against a small `UHDDevice` seam (the real
+`import uhd` is isolated in one lazily-called function,
+`_open_real_uhd_device`, so the rest of the Agent process — including
+`simulated` mode — never needs `uhd` installed); a real-TX safety gate
+(`settings.enable_real_tx`/`ROGUE_ENABLE_REAL_TX`) refuses to key the
+transmitter unless explicitly set; `agents/common/agent.py`'s
+`AgentRuntime` now actually uses `mode` to pick `MockSDRAdapter` vs
+`EttusX440Adapter` (previously `mode` only reached the presence heartbeat
+label). `uhd` is a new optional dependency
+(`pip install .[x440]`), not part of the base install.
+
+While scoping this, found and fixed a real gap: the compiled `ReplayPlan`
+had no per-channel link to which recording plays where —
+`OccupiedBand`/`CompositeChannel` only carried `emission_id`. Added
+`recording: RecordingReference` to both
+(`rogue/spectrum/models.py`/`rogue/compiler/models.py`), populated at the
+one place each is constructed
+(`rogue/spectrum/occupancy.py`/`rogue/compiler/windows.py`) where the
+resolved reference was already available but previously discarded. This
+also tightened M8's behaviour: `rogue.execution.orchestrator.prepare_run`
+now sends each channel's `PREFLIGHT` only the recording(s) it actually
+needs, not the whole plan's manifest.
+
+Scope for this pass (ADR-009): one X440, exactly one recording per
+physical channel (a shared/composite window needing real baseband mixing
+is rejected, not silently mis-transmitted), `cf32_le` only, no artificial
+looping, no precise `end_seconds` alignment (needs L3/L4 timed commands),
+fixed default gain. `DeepwaveAIR7311Adapter` is unaffected — still M10.
+
+Backend test suite grew from 289 to 301 tests: `tests/unit/agents/
+test_x440_adapter.py` (fake `UHDDevice` — configure/arm/start/stop/
+emergency-stop sequencing, the real-TX gate refusing then allowing start,
+bounded-chunk streaming, discover() readback, single-recording/
+single-format rejection), `AgentRuntime` mode-selection tests, and compiler/
+orchestrator tests for the new per-channel recording linkage. `ruff`/
+`mypy` both pass with `uhd` absent, confirming the lazy-import boundary.
+`docs/testing/manual-verification-guide.md` gained an M9 section — written
+for the user to run on real lab hardware, explicitly not something this
+session confirmed.
+
+### M10 — X440 + AIR7311 capability-based scheduling (code complete, hardware-unverified)
+
+Branch `feature/air7311-and-capability-scheduling`, based on
+`feature/x440-real-adapter` after M9. See ADR-010 for the full scope
+record — summary below.
+
+**Same environment constraint as M9: no SoapySDR bindings and no AIR7311
+hardware here**, so this milestone's exit criterion (both families
+demonstrated on real hardware) was not met in this session either.
+
+`agents/common/air7311_adapter.py`'s `DeepwaveAIR7311Adapter` implements
+`SDRAdapter` against native SoapySDR (per ADR-005). Rather than duplicate
+M9's adapter, the vendor-agnostic logic (lease bookkeeping, the real-TX
+safety gate, bounded-chunk streaming) was extracted from
+`EttusX440Adapter` into a new shared
+`agents/common/sdr_adapter_base.StreamingSDRAdapter`; both adapters are now
+thin subclasses supplying only their vendor-specific device-opening
+function. Unlike `uhd`, SoapySDR has no reliable pip-installable package,
+so no `pyproject.toml` extra was added for it — provisioning is documented
+in the manual-verification-guide instead, matching `deployment.md` §7's
+already-flagged bare-metal-driver-provisioning gap. `AgentRuntime` gained
+an `"air7311"` mode.
+
+Separately, closed a real gap in "capability-based scheduling": M6's
+allocator already picks physical channels by capability
+(tunable-range/bandwidth checks), but it only ever scheduled against the
+static `DEFAULT_CAPABILITY_PROFILE` — never the live capabilities M8's
+agent registry already collects. New
+`rogue.persistence.agents.aggregate_capability_profile` builds a
+`HardwareCapabilityProfile` spanning every currently-online agent of
+either family; `rogue.persistence.replay.compile_and_store_replay_plan`
+now uses it by default when at least one agent is online, falling back to
+the static default only when none is — making CLAUDE.md rule 10's "static
+profiles are defaults only" actually true. Existing tests are unaffected
+(they compile against an empty agent registry, so the fallback preserves
+prior behaviour exactly — verified, not just asserted).
+
+Backend test suite grew from 301 to 317 tests:
+`tests/unit/agents/test_air7311_adapter.py` (mirrors M9's X440 test shape
+against a fake `SoapyDevice`), an `AgentRuntime` mode-selection test,
+`aggregate_capability_profile` tests (empty registry, all-stale, spans two
+families, excludes a stale agent), and `compile_and_store_replay_plan`
+tests proving the live-vs-static distinction by device_id. `ruff`/`mypy`
+pass with neither `uhd` nor `SoapySDR` installed.
+`docs/testing/manual-verification-guide.md` gained an M10 section for the
+user's lab.
 
 ## 4. Git workflow
 

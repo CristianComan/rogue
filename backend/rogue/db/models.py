@@ -165,6 +165,21 @@ class ScenarioRunORM(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class SDRAgentORM(Base):
+    """Presence-driven Agent inventory (M8) — see ``rogue.domain.agent.SDRAgentRecord``.
+
+    Mutable and upserted on every heartbeat, like ``ScenarioRunORM`` —
+    unlike scenario/replay-plan rows, presence has no immutable-once-
+    published concept at all.
+    """
+
+    __tablename__ = "sdr_agents"
+
+    agent_id: Mapped[str] = mapped_column(String, primary_key=True)
+    document: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class IdempotencyKeyORM(Base):
     """Cached response for a replayed mutating request, keyed per endpoint."""
 

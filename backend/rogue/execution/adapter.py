@@ -10,29 +10,52 @@ simulated adapter boundary is stable").
 
 Methods are scoped to one `(device_id, channel_index)` pair rather than one
 adapter instance per channel — this models "one Agent, many devices"
-(sdr-architecture.md section 1), matching docker-compose.yml's single
-`simulated-agent` service.
+(sdr-architecture.md section 1). In `MockSDRAdapter`'s case that's one
+process-wide instance per API process (M7, `rogue.persistence.run`); the
+M8 `AgentRuntime` (`agents/common/agent.py`) constructs one of these per
+real Agent process instead, one per docker-compose `simulated-agent-*`
+service.
 """
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import UUID
 
 from rogue.compiler.models import PhysicalTxChannelCapability, RfWindow
+from rogue.domain.recording import IQRecording
 from rogue.domain.run import DeviceLease
 
 
-class SimulatedDeviceFailureError(Exception):
+class AdapterOperationError(Exception):
+    """Base for any `SDRAdapter` call that failed for a given channel.
+
+    `rogue.execution.orchestrator` catches this base (not the specific
+    subclasses) so a remote Agent's `AgentUnreachableError`
+    (`rogue.execution.remote_adapter`, M8) fails a run the same way an
+    in-process `SimulatedDeviceFailureError` always has — no new
+    orchestrator branches needed to add a second `SDRAdapter`
+    implementation (ADR-008).
+    """
+
+    def __init__(self, device_id: str, channel_index: int, message: str) -> None:
+        super().__init__(message)
+        self.device_id = device_id
+        self.channel_index = channel_index
+
+
+class SimulatedDeviceFailureError(AdapterOperationError):
     """Raised by MockSDRAdapter when a test has configured this step to fail."""
 
     def __init__(self, device_id: str, channel_index: int, method: str) -> None:
-        super().__init__(f"simulated device failure: {device_id}:{channel_index}.{method}()")
-        self.device_id = device_id
-        self.channel_index = channel_index
+        super().__init__(
+            device_id,
+            channel_index,
+            f"simulated device failure: {device_id}:{channel_index}.{method}()",
+        )
         self.method = method
 
 
@@ -52,9 +75,14 @@ class SDRAdapter(Protocol):
     """The vendor-neutral operations every SDR adapter implementation exposes."""
 
     async def discover(self) -> list[PhysicalTxChannelCapability]: ...
-    async def reserve(self, device_id: str, channel_index: int, run_id: UUID) -> DeviceLease: ...
+    async def reserve(
+        self, device_id: str, channel_index: int, run_id: UUID, ttl_seconds: float
+    ) -> DeviceLease: ...
+    async def renew(self, lease: DeviceLease, ttl_seconds: float) -> DeviceLease: ...
     async def release(self, lease: DeviceLease) -> None: ...
-    async def preflight(self, device_id: str, channel_index: int, window: RfWindow) -> None: ...
+    async def preflight(
+        self, device_id: str, channel_index: int, window: RfWindow, recordings: list[IQRecording]
+    ) -> None: ...
     async def configure(self, device_id: str, channel_index: int, window: RfWindow) -> None: ...
     async def arm(self, device_id: str, channel_index: int, start_at_seconds: float) -> None: ...
     async def start(self, device_id: str, channel_index: int) -> None: ...
@@ -107,21 +135,38 @@ class MockSDRAdapter:
         await asyncio.sleep(_SIMULATED_TRANSFER_DELAY_S)
         return list(self._capabilities)
 
-    async def reserve(self, device_id: str, channel_index: int, run_id: UUID) -> DeviceLease:
+    async def reserve(
+        self, device_id: str, channel_index: int, run_id: UUID, ttl_seconds: float
+    ) -> DeviceLease:
         await self._simulate(device_id, channel_index, "reserve")
         self._state(device_id, channel_index).leased = True
+        leased_at = datetime.now(UTC)
         return DeviceLease(
             device_id=device_id,
             channel_index=channel_index,
             run_id=run_id,
-            leased_at=datetime.now(UTC),
+            leased_at=leased_at,
+            expires_at=leased_at + timedelta(seconds=ttl_seconds),
+        )
+
+    async def renew(self, lease: DeviceLease, ttl_seconds: float) -> DeviceLease:
+        # Deliberately not gated by _fail_on/_simulate's delay: renewal is the
+        # lease-sweep's periodic heartbeat, not a one-off configuration step a
+        # test would want to inject failure into (see module docstring).
+        return lease.model_copy(
+            update={"expires_at": datetime.now(UTC) + timedelta(seconds=ttl_seconds)}
         )
 
     async def release(self, lease: DeviceLease) -> None:
         await self._simulate(lease.device_id, lease.channel_index, "release")
         self._state(lease.device_id, lease.channel_index).leased = False
 
-    async def preflight(self, device_id: str, channel_index: int, window: RfWindow) -> None:
+    async def preflight(
+        self, device_id: str, channel_index: int, window: RfWindow, recordings: list[IQRecording]
+    ) -> None:
+        # In-process mode has no separate Agent process to cache into — the
+        # real local-cache download only happens in agents/common/cache.py,
+        # reached via RemoteAgentAdapter's PREFLIGHT command (ADR-008).
         await self._simulate(device_id, channel_index, "preflight")
 
     async def configure(self, device_id: str, channel_index: int, window: RfWindow) -> None:

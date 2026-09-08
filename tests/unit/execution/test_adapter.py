@@ -39,23 +39,35 @@ async def test_reserve_marks_the_channel_leased() -> None:
     adapter = MockSDRAdapter(capabilities=[])
     run_id = uuid4()
 
-    lease = await adapter.reserve(DEVICE, CHANNEL, run_id)
+    lease = await adapter.reserve(DEVICE, CHANNEL, run_id, ttl_seconds=30.0)
 
     assert lease.device_id == DEVICE
     assert lease.channel_index == CHANNEL
     assert lease.run_id == run_id
+    assert lease.expires_at > lease.leased_at
     status = await adapter.status(DEVICE, CHANNEL)
     assert status.leased is True
 
 
 async def test_release_clears_the_lease() -> None:
     adapter = MockSDRAdapter(capabilities=[])
-    lease = await adapter.reserve(DEVICE, CHANNEL, uuid4())
+    lease = await adapter.reserve(DEVICE, CHANNEL, uuid4(), ttl_seconds=30.0)
 
     await adapter.release(lease)
 
     status = await adapter.status(DEVICE, CHANNEL)
     assert status.leased is False
+
+
+async def test_renew_extends_expiry() -> None:
+    adapter = MockSDRAdapter(capabilities=[])
+    lease = await adapter.reserve(DEVICE, CHANNEL, uuid4(), ttl_seconds=30.0)
+
+    renewed = await adapter.renew(lease, ttl_seconds=30.0)
+
+    assert renewed.expires_at > lease.expires_at
+    assert renewed.id == lease.id
+    assert renewed.device_id == lease.device_id
 
 
 async def test_configure_marks_the_channel_configured() -> None:
@@ -102,7 +114,7 @@ async def test_fail_on_raises_at_the_configured_step() -> None:
 async def test_fail_on_does_not_affect_other_steps() -> None:
     adapter = MockSDRAdapter(capabilities=[], fail_on={(DEVICE, CHANNEL, "configure")})
 
-    lease = await adapter.reserve(DEVICE, CHANNEL, uuid4())
+    lease = await adapter.reserve(DEVICE, CHANNEL, uuid4(), ttl_seconds=30.0)
     assert lease.device_id == DEVICE
 
 

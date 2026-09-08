@@ -109,7 +109,16 @@ async def stop_run(
 async def emergency_stop_run(
     scenario_id: UUID, plan_id: UUID, run_id: UUID, session: SessionDep
 ) -> ScenarioRun:
-    return await run_persistence.emergency_stop_run(session, scenario_id, run_id)
+    # Bypasses replay_or_execute (no idempotency key, per this module's
+    # docstring), so this is the one place responsible for its own commit —
+    # unlike arm/start/stop, this was previously missing here entirely,
+    # meaning a real (pooled, per-request) connection would roll the status
+    # change back on session close and the emergency-stop would never
+    # actually persist. Found while adding M8's lease-sweep, which also
+    # calls this function and depends on it durably persisting.
+    run = await run_persistence.emergency_stop_run(session, scenario_id, run_id)
+    await session.commit()
+    return run
 
 
 @router.get("/{scenario_id}/replay-plans/{plan_id}/runs/{run_id}", response_model=ScenarioRun)

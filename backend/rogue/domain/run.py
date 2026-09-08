@@ -9,9 +9,12 @@ convention in rogue.execution.orchestrator/rogue.persistence.run (only ever
 appending to `events`, only ever advancing `status`), not by a type-level
 constraint here.
 
-DeviceLease has no expiry/renewal logic yet — that's M8's real distributed
-lease lifecycle (docs/architecture/implementation-plan.md). This is the
-shape a real lease will later fill in.
+DeviceLease.expires_at (M8) is enforced twice: centrally by
+rogue.execution.lease_sweep (renews active runs' leases on a short
+interval, emergency-stops a run whose lease lapsed without renewal) and
+locally by the Agent process itself, independent of control-plane
+reachability (sdr-architecture.md §7) — see
+docs/decisions/ADR-008-distributed-agent-protocol.md.
 """
 
 from __future__ import annotations
@@ -47,6 +50,7 @@ class DeviceLease(IdentifiedMixin):
     channel_index: int
     run_id: UUID
     leased_at: datetime
+    expires_at: datetime
 
 
 class RunEventKind(StrEnum):
@@ -59,6 +63,7 @@ class RunEventKind(StrEnum):
     STARTED = "started"
     STOPPED = "stopped"
     EMERGENCY_STOPPED = "emergency_stopped"
+    LEASE_RENEWED = "lease_renewed"
     ERROR = "error"
 
 

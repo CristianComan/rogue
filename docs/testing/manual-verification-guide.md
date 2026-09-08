@@ -1,4 +1,4 @@
-# Checking ROGUE yourself — manual verification guide (M0–M7)
+# Checking ROGUE yourself — manual verification guide (M0–M10)
 
 A hands-on walkthrough for verifying what's been built so far, milestone by
 milestone, without having to read the code. Everything is copy/paste — run
@@ -17,6 +17,9 @@ each block in a terminal from the repo root
 | M6 | Replay Plan compiler | `curl` against a running server |
 | M7 | Simulated SDR execution | `curl` against a running server |
 | — | Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`) | run the script, then `curl`/`psql` |
+| M8 | Distributed SDR Agent | full `docker compose up` + `curl`, killing a container mid-run |
+| M9 | First real adapter (X440) | **lab hardware required — not runnable in a dev sandbox** |
+| M10 | AIR7311 adapter + live capability scheduling | **lab hardware required** for AIR7311; live-scheduling check is runnable in software |
 
 Each section is independent — jump to whichever milestone you want to check.
 Section 0 is shared setup everything else depends on.
@@ -40,14 +43,15 @@ M0/M1 don't need anything beyond the venv.
 | `postgres` | PostgreSQL/PostGIS — every persisted scenario/draft/version/recording/replay plan | Yes (M2+) |
 | `minio` | S3-compatible object storage — SigMF recording bytes | Yes (M4+) |
 | `minio-init` | One-shot job that creates the `rogue` bucket in MinIO, then exits | Yes (M4+, runs once) |
-| `nats` | JetStream message broker — SDR Agent command/telemetry protocol | Not yet — no section below talks to it |
-| `api` | The FastAPI backend, containerized | No — this guide runs it directly with `uvicorn --reload` instead for a faster edit/reload loop; use this if you'd rather not set up a local Python env |
+| `nats` | JetStream message broker — SDR Agent command/telemetry protocol | Only for M8 |
+| `api` | The FastAPI backend, containerized | No, except for M8 — every other section runs it directly with `uvicorn --reload` instead for a faster edit/reload loop |
 | `ui` | The Vite frontend, containerized | No — this guide runs `frontend/dev.sh` directly instead, same reason |
 | `tiles` | Self-hosted MapLibre basemap tiles | Optional, M3 only — see that section |
-| `simulated-agent` | Placeholder simulated SDR Agent | Not yet exercised by any section below |
+| `simulated-agent-1`, `simulated-agent-2` | Simulated SDR Agent processes (M8) | Only for M8 — that section runs the whole stack via `docker compose up`, not `uvicorn --reload` |
 
-For everything in this guide you only need `postgres`, `minio` and
-`minio-init` running. Check whether they already are:
+For M0–M7 and the drone-corpus loader you only need `postgres`, `minio` and
+`minio-init` running (M8 needs the full stack — see that section). Check
+whether they already are:
 
 ```bash
 docker ps --filter "name=rogue-postgres" --filter "name=rogue-minio"
@@ -897,6 +901,452 @@ curl -s http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs 
 ```
 
 Expect both runs from steps 1 and 4, in creation order.
+
+## M8 — Distributed SDR Agent
+
+M8 replaces M7's in-process `MockSDRAdapter` with real, separate Agent
+processes reached over NATS (still simulated hardware — see ADR-008). This
+section needs the **full** stack, not just `postgres`/`minio`, and drives
+everything through the containerized `api` rather than a local `uvicorn`.
+
+**1. Build and start the full stack:**
+
+```bash
+docker compose up -d --build postgres nats minio minio-init api simulated-agent-1 simulated-agent-2
+```
+
+Wait a few seconds, then confirm both Agents registered themselves:
+
+```bash
+curl -s http://localhost:8000/agents | python3 -c "
+import sys, json
+for a in json.load(sys.stdin):
+    print(a['agent_id'], a['status'], len(a['capabilities']), 'channels')
+"
+```
+
+Expect `sim-agent-01 online 12 channels` and `sim-agent-02 online 12
+channels` — `sim-agent-01` owns `x440-1`/`air7311-1`, `sim-agent-02` owns
+`x440-2`/`air7311-2` (`ROGUE_AGENT_DEVICE_IDS` in `docker-compose.yml`).
+
+**2. Upload a recording and compile a plan**, same shape as M6's section but
+against the containerized stack (`http://localhost:9000` for MinIO,
+`http://localhost:8000` for the API both still work the same way):
+
+```bash
+python3 -c "
+import hashlib, json, struct
+import boto3
+samples = b''.join(struct.pack('<ff', 0.001 * i, -0.001 * i) for i in range(100))
+meta = {'global': {'core:datatype': 'cf32_le', 'core:sample_rate': 1_000_000,
+                    'core:sha512': hashlib.sha512(samples).hexdigest()},
+        'captures': [{'core:sample_start': 0, 'core:frequency': 2_400_000_000}], 'annotations': []}
+s3 = boto3.client('s3', endpoint_url='http://localhost:9000',
+                   aws_access_key_id='rogue', aws_secret_access_key='rogue_dev_password')
+s3.put_object(Bucket='rogue', Key='m8-manual-check/test.sigmf-meta', Body=json.dumps(meta).encode())
+s3.put_object(Bucket='rogue', Key='m8-manual-check/test.sigmf-data', Body=samples)
+"
+
+SCENARIO=$(curl -s -X POST http://localhost:8000/scenarios -H "Content-Type: application/json" -d '{
+  "name": "m8-manual-check", "owner": "manual",
+  "area_of_operation": {"type":"Polygon","coordinates":[[[13.0,52.0],[13.5,52.0],[13.5,52.5],[13.0,52.5],[13.0,52.0]]]}
+}')
+SCENARIO_ID=$(echo "$SCENARIO" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+DRAFT=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts -H "Content-Type: application/json" -d '{"author":"manual-check"}')
+DRAFT_ID=$(echo "$DRAFT" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+RECORDING=$(curl -s -X POST http://localhost:8000/recordings -H "Content-Type: application/json" -d '{
+  "metadata_object_key": "m8-manual-check/test.sigmf-meta", "data_object_key": "m8-manual-check/test.sigmf-data"
+}')
+RECORDING_ID=$(echo "$RECORDING" | python3 -c "import sys,json;print(json.load(sys.stdin)['recording']['id'])")
+
+curl -s -X PUT http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID \
+  -H "Content-Type: application/json" -d '{
+    "author": "manual-check", "expected_revision": 0,
+    "zones": [], "receivers": [], "timeline_events": [],
+    "missions": [{
+      "name": "recon-1",
+      "platform": {"name": "Quad", "category": "multirotor", "max_speed_mps": 18.0},
+      "trajectory": {"template": "waypoint_transit", "default_speed_mps": 12.0, "waypoints": [
+        {"sequence_index": 0, "position": {"type": "Point", "coordinates": [13.4, 52.2]}, "altitude_m": 100.0},
+        {"sequence_index": 1, "position": {"type": "Point", "coordinates": [13.45, 52.25]}, "altitude_m": 100.0}
+      ]},
+      "rf_links": [{
+        "role": "c2", "band": {"freq_min_hz": 2.4e9, "freq_max_hz": 2.4835e9},
+        "frequency_behaviour": {"mode": "scripted", "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.412e9}]},
+        "emissions": [{"recording": {"recording_id": "'"$RECORDING_ID"'", "version": 1}}]
+      }]
+    }]
+  }' > /dev/null
+
+VERSION=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/drafts/$DRAFT_ID/publish)
+VERSION_NUMBER=$(echo "$VERSION" | python3 -c "import sys,json;print(json.load(sys.stdin)['version_number'])")
+PLAN=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/versions/$VERSION_NUMBER/compile \
+  -H "Content-Type: application/json" -d '{"duration_s": 20.0}')
+PLAN_ID=$(echo "$PLAN" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+echo "$PLAN" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['allocations'])"
+```
+
+Expect the allocation to land on `x440-1` (the first capability-profile
+channel whose tunable range covers 2.412 GHz) — that's `sim-agent-01`'s device.
+
+**3. Create+prepare a run over the real distributed path**, then check the
+owning Agent's logs show a real cache download — this is the part that
+didn't exist before M8 (M7 only re-checked the catalogue's stored hash,
+never actually cached bytes anywhere):
+
+```bash
+RUN=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs \
+  -H "Content-Type: application/json" -d '{"operator": "m8-manual-check"}')
+RUN_ID=$(echo "$RUN" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+echo "$RUN" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status'], [e['kind'] for e in d['events']])"
+
+docker compose logs simulated-agent-1 --tail=5
+```
+
+Expect `prepared ['reserved', 'prefetch_verified', 'configured']` and a
+`cache miss ... downloading` line in the Agent's log.
+
+**4. Arm and start it, then watch the central lease-sweep renew the lease**
+without you doing anything — this runs on a ~10s interval
+(`LEASE_TTL_SECONDS / 3`) purely from the API process's background task:
+
+```bash
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID/arm > /dev/null
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID/start > /dev/null
+
+sleep 12
+curl -s http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['device_leases'][0]['expires_at'], [e['kind'] for e in d['events']])"
+```
+
+Expect at least one `lease_renewed` event and an `expires_at` further in the
+future than when you started.
+
+**5. Kill the owning Agent mid-`RUNNING`** and confirm the central sweep
+reaches a safe terminal state on its own:
+
+```bash
+docker compose stop simulated-agent-1
+
+sleep 20
+curl -s http://localhost:8000/scenarios/$SCENARIO_ID/replay-plans/$PLAN_ID/runs/$RUN_ID \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status']); [print(e['kind'], e['message']) for e in d['events'][-2:]]"
+```
+
+Expect `emergency_stopped`, with the last two events being `error`s
+explaining the Agent didn't respond to the renewal/emergency-stop commands
+— this is expected and correct: the run still lands in a terminal,
+never-transmitting-again state even though the physical stop command
+couldn't reach a dead process. (In real hardware this exact scenario is
+what the Agent-side *local* watchdog independently covers — it isn't
+exercised here since the Agent process itself is the one that's dead.)
+
+**6. Bring the Agent back** and confirm it re-registers:
+
+```bash
+docker compose start simulated-agent-1
+sleep 7
+curl -s http://localhost:8000/agents | python3 -c "
+import sys, json
+print([(a['agent_id'], a['status']) for a in json.load(sys.stdin)])
+"
+```
+
+Expect both agents `online` again.
+
+## M9 — First real adapter (Ettus X440)
+
+**This section was written but not run by the assistant** — the
+development environment used to build M9 has no `uhd` Python package and
+no physical X440 attached (confirmed: `import uhd` fails, `lsusb` shows no
+USRP-like device). ADR-009 records this explicitly: M9's exit criterion
+(actual cabled/attenuated replay) is unverified until *you* run the steps
+below in your lab. Everything else about `EttusX440Adapter` — command
+sequencing, the real-TX safety gate, bounded-chunk streaming — is covered
+by `tests/unit/agents/test_x440_adapter.py` against a fake `UHDDevice`,
+which *has* been run (`pytest tests/unit/agents/test_x440_adapter.py`).
+
+**Safety first — read this before connecting anything.** `ROGUE_ENABLE_REAL_TX=1`
+is a real transmit-enable switch (CLAUDE.md §10). Do not run this against
+an antenna. Use a cabled, attenuated setup: X440 TX port → fixed
+attenuator (enough to bring the output well under your spectrum
+analyzer's/receiver's safe input level) → spectrum analyzer or a second
+SDR configured as a receiver. Confirm your attenuation budget before
+enabling TX, not after.
+
+**1. Install the X440 extra on the Agent host** (bare-metal, not
+docker-compose — ADR-004):
+
+```bash
+pip install .[x440]
+python -c "import uhd; print(uhd.__version__)"
+```
+
+If this doesn't import cleanly, stop here and fix the UHD installation
+first — none of the following will work otherwise. Also confirm the device
+is enumerable:
+
+```bash
+uhd_find_devices
+```
+
+**2. Confirm `_open_real_uhd_device`'s UHD calls against your installed
+version.** `agents/common/x440_adapter.py`'s module docstring and ADR-009
+both flag this explicitly: the exact API shape (`uhd.usrp.MultiUSRP`,
+`StreamArgs`, `TuneRequest`, `TXMetadata`, range-object `.start()`/`.stop()`)
+was written against UHD's documented API, not exercised against a real
+install. A quick sanity script:
+
+```python
+import uhd
+usrp = uhd.usrp.MultiUSRP("addr=<your X440's address>")
+print(usrp.get_tx_num_channels())
+print(usrp.get_tx_freq_range(0))
+```
+
+Adjust `agents/common/x440_adapter.py` if any of these calls don't match
+your UHD version's actual signatures, then re-run
+`pytest tests/unit/agents/test_x440_adapter.py` to confirm the rest of the
+adapter's logic still holds.
+
+**3. Register a real recording** (same as M4/M8's steps — a short,
+`cf32_le` SigMF pair; `EttusX440Adapter` only supports `cf32_le` in this
+pass) via the control plane, compile a plan targeting the X440's
+capability profile, exactly as in the M8 section above, but stop before
+creating the run.
+
+**4. Start the Agent process in `x440` mode** on the machine physically
+connected to the X440 (not in docker-compose):
+
+```bash
+ROGUE_AGENT_ID=x440-lab-01 \
+ROGUE_AGENT_MODE=x440 \
+ROGUE_AGENT_DEVICE_IDS=x440-1 \
+ROGUE_X440_DEVICE_ARGS="addr=<your X440's address>" \
+ROGUE_ENABLE_REAL_TX=1 \
+ROGUE_NATS_URL=nats://<control-server-lab-address>:4222 \
+ROGUE_S3_ENDPOINT=http://<control-server-lab-address>:9000 \
+ROGUE_S3_ACCESS_KEY=rogue ROGUE_S3_SECRET_KEY=rogue_dev_password \
+python -m agents.common.main
+```
+
+Confirm it registers: `curl -s http://<control-server>:8000/agents` should
+list `x440-lab-01` online with real device-discovered capabilities (not
+the static default profile — `discover()` reads back actual UHD ranges).
+
+**5. Create+arm+start the run** exactly as in the M8 section, watching
+your spectrum analyzer for the expected signal at the compiled center
+frequency once `start` is called. Confirm `stop`/`emergency-stop` actually
+cease transmission (visually, on the analyzer) — this is the part no unit
+test can substitute for.
+
+**6. Confirm the safety gate** by repeating with `ROGUE_ENABLE_REAL_TX`
+unset (or `0`): `start` should fail with a `RealTxNotAuthorizedError`
+surfaced as a run `error` event, and the analyzer should show nothing.
+
+Report back (or file as a follow-up) anything in step 2 that needed
+adjusting — that feedback is exactly what turns this from "code complete,
+hardware-unverified" into "done."
+
+## M10 — AIR7311 adapter + live capability-based scheduling
+
+M10 has two independent parts. **The live-scheduling part was actually run
+and verified in this session** (it needs no special hardware — just the
+existing `docker compose` stack). **The AIR7311 hardware part was not** —
+same constraint as M9: no SoapySDR bindings, no physical AIR7311 here.
+
+### Part A — live capability-based scheduling (verified in this session)
+
+This proves `rogue.persistence.replay.compile_and_store_replay_plan` now
+schedules against the live agent registry (M8's `GET /agents`) instead of
+always the static `DEFAULT_CAPABILITY_PROFILE`, once at least one Agent is
+online.
+
+**1. Bring up the full stack** (same as the M8 section):
+
+```bash
+docker compose up -d --build postgres nats minio minio-init api simulated-agent-1 simulated-agent-2
+sleep 6
+curl -s http://localhost:8000/agents | python3 -c "
+import sys, json
+for a in json.load(sys.stdin):
+    print(a['agent_id'], a['status'], len(a['capabilities']))
+"
+```
+
+Expect both `sim-agent-01`/`sim-agent-02` `online` with 12 capabilities
+each.
+
+**2. Register a recording and publish a scenario version** (same pattern
+as M6/M8/M9's sections — a scenario, one recording, one RF link at
+2.412 GHz), then **compile without an explicit `capability_profile`**:
+
+```bash
+PLAN=$(curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/versions/$VERSION_NUMBER/compile \
+  -H "Content-Type: application/json" -d '{"duration_s": 20.0}')
+echo "$PLAN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print('capability_profile.id =', d['capability_profile']['id'])
+print('allocations =', d['allocations'])
+"
+```
+
+Expect `capability_profile.id = live-agent-registry` (not
+`default-initial-planning-profile`) and the allocation landing on one of
+the running Agents' real device_ids (`x440-1`, in this compose setup).
+This is exactly what was run to confirm M10's live-scheduling piece — the
+output above is real, not illustrative.
+
+**3. Confirm the fallback still works.** Stop both agent containers, wait
+past their presence-staleness window, and compile again:
+
+```bash
+docker compose stop simulated-agent-1 simulated-agent-2
+sleep 20
+curl -s -X POST http://localhost:8000/scenarios/$SCENARIO_ID/versions/$VERSION_NUMBER/compile \
+  -H "Content-Type: application/json" -d '{"duration_s": 20.0}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['capability_profile']['id'])"
+```
+
+Expect `default-initial-planning-profile` — the static default, since no
+agent is online.
+
+### Part B — DeepwaveAIR7311Adapter (verified 2026-09-08, see caveat below)
+
+The AIR7311 is a Deepwave AIR-T unit: the RF front end is directly attached
+to an embedded NVIDIA Jetson/Orin compute module, which **is** the Agent
+host (ADR-004) — there is no separate PC in between. SoapySDR runs locally
+on that Orin, and only ROGUE's own NATS/S3 traffic crosses the Ethernet
+link to the control plane (ADR-005: no vendor-library remoting).
+
+**Caveat on how this was actually verified:** the specific AIR-T unit used
+here ships Python 3.10.12 (`airstack` OS image), while ROGUE needs 3.11+
+(`datetime.UTC`) and targets 3.12. Rather than reimage the device or rebuild
+its ABI-locked `python3-soapysdr` bindings from source, this pass ran
+`agents.common.main` on the **control-plane host** (Python 3.12) against the
+Orin over `soapyremote-server` (`ROGUE_AIR7311_DEVICE_ARGS=
+"driver=remote,remote=<orin-ip>,remote:driver=SoapyAIRT"`) — an explicit,
+documented, temporary exception to ADR-005 §1, recorded in
+`docs/decisions/ADR-011-temporary-soapyremote-exception-for-m10-verification.md`.
+Steps 1-2 below were run directly on the Orin (unaffected by any of this);
+steps 4-6 were run this way instead of directly on the Orin. **This is not
+the target production deployment shape** — a real Agent host still needs
+native Python 3.12 + matching SoapySDR bindings; see ADR-011 for why this
+was judged an acceptable narrow exception for M10 verification specifically
+(no timing-critical synchronization requirement at stake, unlike M11+).
+
+**1. Confirm SoapySDR sees the device** (already shipped on the AIR-T's
+`airstack` OS image — no separate install needed on Deepwave-provided
+units):
+
+```bash
+SoapySDRUtil --find
+```
+
+Confirmed output on a real unit:
+
+```
+Found device 0
+  driver = SoapyAIRT
+  hardware = AIR7311
+  serial = 31068155
+  ...
+```
+
+`driver = SoapyAIRT` is the key line — that's the exact driver name to use
+in `ROGUE_AIR7311_DEVICE_ARGS` below, not a generic placeholder. If more
+than one AIRT unit could ever be on the same network/host, disambiguate
+with `driver=SoapyAIRT,serial=<serial>`.
+
+**2. Confirm `_open_real_soapy_device`'s API calls against your installed
+SoapySDR/`airstack` version.** `agents/common/air7311_adapter.py`'s module
+docstring and ADR-010 both flag this: the exact call shape
+(`SoapySDR.Device`, `setFrequency`/`setSampleRate`/`setBandwidth`/
+`setGain`, `setupStream`/`activateStream`/`writeStream`) was written
+against SoapySDR's documented API, not exercised against a real install:
+
+```python
+import SoapySDR
+from SoapySDR import SOAPY_SDR_TX
+device = SoapySDR.Device("driver=SoapyAIRT")
+print(device.getNumChannels(SOAPY_SDR_TX))       # expect 4 (2 channels x 2 daughtercards)
+print(device.getFrequencyRange(SOAPY_SDR_TX, 0))
+```
+
+Adjust `agents/common/air7311_adapter.py` if anything doesn't match, then
+re-run `pytest tests/unit/agents/test_air7311_adapter.py`.
+
+**3. Cabled/attenuated setup — same safety note as M9.** AIR7311 TX port →
+fixed attenuator → spectrum analyzer or receiving SDR. Confirm your
+attenuation budget before enabling TX. **Start with
+`ROGUE_ENABLE_REAL_TX=0`** and confirm presence/`discover()`/`configure`
+work before ever setting it to `1`.
+
+**4. Start the Agent in `air7311` mode.** On a Python 3.12-native Agent host,
+run this directly on the Orin (same network as the control-plane host —
+confirm with `ifconfig`/`ip addr` that its Ethernet interface, e.g. `eth0`,
+is reachable from the control-plane host's IP on ports 4222/NATS and
+9000/MinIO before starting) with `ROGUE_AIR7311_DEVICE_ARGS="driver=
+SoapyAIRT"`. **If the Orin is still Python 3.10 like the unit this was
+verified against**, run the Agent process on the control-plane host instead,
+with `soapyremote-server` running on the Orin (see the ADR-011 caveat
+above):
+
+```bash
+ROGUE_AGENT_ID=air7311-orin-01 \
+ROGUE_AGENT_MODE=air7311 \
+ROGUE_AGENT_DEVICE_IDS=air7311-1 \
+ROGUE_AIR7311_DEVICE_ARGS="driver=remote,remote=<orin-ip>,remote:driver=SoapyAIRT" \
+ROGUE_ENABLE_REAL_TX=0 \
+ROGUE_NATS_URL=nats://<control-server-lab-ip>:4222 \
+ROGUE_S3_ENDPOINT=http://<control-server-lab-ip>:9000 \
+ROGUE_S3_ACCESS_KEY=rogue ROGUE_S3_SECRET_KEY=rogue_dev_password \
+python -m agents.common.main
+```
+
+(Drop `remote,remote=<orin-ip>,remote:` and use plain `driver=SoapyAIRT` for
+the native-3.12-on-Orin case.) Note SoapyAIRT tolerates only one client
+connection at a time — stop the Agent before running any other SoapySDR
+script against the same device, or connections will time out.
+
+**5. Confirm real discovered capabilities show up in the registry.** Once
+the Orin's Agent process connects, `GET /agents` should show
+`air7311-orin-01` online with capabilities read back from the real device
+via `discover()` (`agents/common/agent.py`'s `AgentRuntime.run()` refreshes
+from the adapter before its first presence publish) — not the illustrative
+static defaults. Confirm the reported `tunable_ranges_hz`/
+`max_usable_bandwidth_hz` look like real AIR7311 numbers, not
+`[[70000000.0, 6000000000.0]]`/`100000000.0` (the static profile's
+placeholder values) coincidentally.
+
+**6. Compile, create+arm+start a run** exactly as in the M8/M9 sections
+(compiling with no explicit `capability_profile` will now schedule against
+this real, live-discovered AIR7311 per M10 — confirm
+`capability_profile.id == "live-agent-registry"` in the compiled plan).
+Watch the spectrum analyzer for the expected signal, then confirm
+`stop`/`emergency-stop` actually cease transmission and that the real-TX
+gate refuses `start` with `ROGUE_ENABLE_REAL_TX` unset — same checks as
+M9, on the AIR7311 path this time.
+
+**Confirmed 2026-09-08** (single-channel scenario, physical 40 dB attenuator
+between the tested channel's TX/RX loopback — see ADR-011's "Outcome"
+section for the full result): `capability_profile.id ==
+"live-agent-registry"`; with `ROGUE_ENABLE_REAL_TX=0`, `start` failed with
+the expected real-TX-not-authorized error after `reserve`/`prefetch_verified`
+/`configure`/`arm` all succeeded; with `ROGUE_ENABLE_REAL_TX=1`, the full
+`reserve -> prefetch_verified -> configure -> arm -> start` cycle succeeded
+and `SoapyRemote` set up and streamed a real TX burst
+(`SoapyRemote::setupTxStream`) to the physical hardware, then `stop`
+completed cleanly. Two real bugs in `agents/common/agent.py`'s PREFLIGHT
+handling were found and fixed in the process — see git history / ADR-011's
+"Outcome" section for detail; they were latent because this dispatch path
+had never previously run against a real (non-`MockSDRAdapter`) adapter.
+Not exercised: a second physical channel (no attenuator was available on
+it this session — real TX was deliberately withheld there), and
+`emergency-stop` specifically (only plain `stop` was exercised).
+
+Report back anything in step 2 that needed adjusting.
 
 ## Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`)
 

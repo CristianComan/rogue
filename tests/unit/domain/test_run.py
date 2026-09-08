@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -37,8 +37,13 @@ def test_scenario_run_status_can_be_set_explicitly() -> None:
 
 def test_device_lease_construction() -> None:
     run_id = uuid4()
+    now = datetime.now(UTC)
     lease = DeviceLease(
-        device_id="sim-1", channel_index=0, run_id=run_id, leased_at=datetime.now(UTC)
+        device_id="sim-1",
+        channel_index=0,
+        run_id=run_id,
+        leased_at=now,
+        expires_at=now + timedelta(seconds=30),
     )
     assert lease.device_id == "sim-1"
     assert lease.channel_index == 0
