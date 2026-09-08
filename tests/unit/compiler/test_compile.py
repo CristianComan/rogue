@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from uuid import uuid4
 
 from compiler_factories import (
     make_capability_profile,
     make_link,
     make_mission,
+    make_receiver,
     make_recording,
     make_scenario_version,
     recording_key,
 )
 
 from rogue.compiler.compile import COMPILER_VERSION, compile_replay_plan
+from rogue.domain.receiver import ReceiverType
 from rogue.domain.rf import RfBand, ScriptedFrequencyChange
 from rogue.domain.validation import ValidationSeverity
 
@@ -70,6 +73,34 @@ def test_compile_infeasible_bandwidth_surfaces_blocking_finding() -> None:
     assert plan.rf_windows == []
     assert plan.allocations == []
     assert any(f.severity == ValidationSeverity.BLOCKING for f in plan.findings)
+
+
+def test_compile_coherent_group_end_to_end_is_deterministic() -> None:
+    recording = make_recording(sample_rate_hz=1_000_000.0, duration_s=100.0)
+    group_id = uuid4()
+    link = make_link(recording.reference(), array_group_id=group_id)
+    mission = make_mission([link])
+    receivers = [
+        make_receiver(ReceiverType.AOA_DOA, array_group_id=group_id, element_index=0),
+        make_receiver(ReceiverType.AOA_DOA, array_group_id=group_id, element_index=1),
+    ]
+    version = make_scenario_version([mission], [recording.reference()], receivers=receivers)
+    recordings = {recording_key(recording.reference()): recording}
+    profile = make_capability_profile()  # 2 channels — exactly enough for the group
+
+    plan_a = compile_replay_plan(version, recordings, duration_s=10.0, capability_profile=profile)
+    plan_b = compile_replay_plan(version, recordings, duration_s=10.0, capability_profile=profile)
+
+    assert all(f.severity != ValidationSeverity.BLOCKING for f in plan_a.findings)
+    assert len(plan_a.rf_windows) == 2  # one per array element, never merged
+    assert len(plan_a.allocations) == 2
+    used_channels = {(a.device_id, a.channel_index) for a in plan_a.allocations}
+    assert len(used_channels) == 2
+
+    assert [w.model_dump(exclude={"id"}) for w in plan_a.rf_windows] == [
+        w.model_dump(exclude={"id"}) for w in plan_b.rf_windows
+    ]
+    assert plan_a.allocations == plan_b.allocations
 
 
 def test_compile_band_switch_propagates_to_realized_events_and_allocation() -> None:

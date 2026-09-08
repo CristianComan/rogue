@@ -23,6 +23,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from uuid import uuid4
 
+from rogue.compiler.coherent_groups import expand_occupied_bands
 from rogue.compiler.frequency import realize_frequency_timeline
 from rogue.compiler.models import (
     CompilerFinding,
@@ -100,9 +101,20 @@ def _pack_bands(
             group_min = min(b.freq_min_hz for b in group)
             group_max = max(b.freq_max_hz for b in group)
             span = max(group_max, band.freq_max_hz) - min(group_min, band.freq_min_hz)
+            # Two elements of the same coherent group (ADR-012) must never
+            # share one physical channel's window — they need to land on
+            # *different* channels simultaneously, unlike ADR-003's normal
+            # same-channel sharing of otherwise-unrelated signals. They are
+            # frequency-identical (same link/emission), so without this
+            # guard they'd merge here just like any other frequency-
+            # adjacent pair.
+            same_coherent_group = band.coherent_group_id is not None and any(
+                b.coherent_group_id == band.coherent_group_id for b in group
+            )
             if (
                 band.freq_min_hz - group_max <= DEFAULT_GUARD_MARGIN_HZ
                 and span <= max_window_bandwidth_hz
+                and not same_coherent_group
             ):
                 group.append(band)
                 placed = True
@@ -113,7 +125,17 @@ def _pack_bands(
     for group in groups:
         freq_min = min(b.freq_min_hz for b in group) - DEFAULT_GUARD_MARGIN_HZ / 2
         freq_max = max(b.freq_max_hz for b in group) + DEFAULT_GUARD_MARGIN_HZ / 2
-        window_key = "|".join(sorted(str(b.link_id) for b in group))
+        # A coherent group's per-element bands share one link_id, which
+        # would otherwise collide into one non-unique window_key across
+        # elements — fold in the target receiver id to disambiguate.
+        window_key = "|".join(
+            sorted(
+                f"{b.link_id}:coherent:{b.array_element_receiver_id}"
+                if b.array_element_receiver_id is not None
+                else str(b.link_id)
+                for b in group
+            )
+        )
         windows.append((window_key, (freq_min + freq_max) / 2, freq_max - freq_min, group))
     return windows, findings
 
@@ -139,7 +161,10 @@ def compute_rf_windows(
                 CompilerFinding(severity=f.severity, code=f.code, message=f.message, path=f.path)
             )
 
-        packed, pack_findings = _pack_bands(state.occupied_bands, capability_profile, path="$")
+        expanded_bands, expand_findings = expand_occupied_bands(state.occupied_bands, version, t)
+        findings.extend(expand_findings)
+
+        packed, pack_findings = _pack_bands(expanded_bands, capability_profile, path="$")
         findings.extend(pack_findings)
 
         current_keys = {window_key for window_key, *_ in packed}
@@ -158,6 +183,10 @@ def compute_rf_windows(
                     bandwidth_hz=b.bandwidth_hz,
                     gain_offset_db=0.0,
                     recording=b.recording,
+                    coherent_group_id=b.coherent_group_id,
+                    array_element_receiver_id=b.array_element_receiver_id,
+                    phase_offset_rad=b.phase_offset_rad,
+                    delay_offset_s=b.delay_offset_s,
                 )
                 for b in group
             ]

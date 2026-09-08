@@ -14,11 +14,13 @@ from __future__ import annotations
 
 from enum import StrEnum
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from rogue.domain.common import RogueModel
 from rogue.domain.timeline import MissionRelativeTimelineEvent
 
 if TYPE_CHECKING:
+    from rogue.domain.receiver import Receiver
     from rogue.domain.rf import RfEmission
     from rogue.domain.scenario import ScenarioVersion
 
@@ -54,13 +56,52 @@ def _resolvable_span_seconds(emission: RfEmission) -> tuple[float, float] | None
     return start, start + emission.duration_override.total_seconds()
 
 
+def _coherent_group_findings(version: ScenarioVersion) -> list[ValidationFinding]:
+    """A DroneRfLink.array_group_id must resolve to >=2 receivers.
+
+    This is the reference-integrity half of coherent-group support (ADR-012)
+    — the geometry/allocation half lives in rogue.compiler.coherent_groups
+    and rogue.compiler.allocation, which assume this check already passed.
+    No separate MONITOR-type check is needed here: Receiver's own
+    model_validator (rogue.domain.receiver) already guarantees any receiver
+    carrying a non-None array_group_id is TDOA or AOA_DOA, never MONITOR.
+    """
+    findings: list[ValidationFinding] = []
+    receivers_by_group: dict[UUID, list[Receiver]] = {}
+    for receiver in version.receivers:
+        if receiver.array_group_id is not None:
+            receivers_by_group.setdefault(receiver.array_group_id, []).append(receiver)
+
+    for mission_index, mission in enumerate(version.missions):
+        for link_index, link in enumerate(mission.rf_links):
+            if link.array_group_id is None:
+                continue
+            path = f"missions[{mission_index}].rf_links[{link_index}].array_group_id"
+            members = receivers_by_group.get(link.array_group_id, [])
+            if len(members) < 2:
+                findings.append(
+                    ValidationFinding(
+                        severity=ValidationSeverity.BLOCKING,
+                        code="coherent_group_unresolvable",
+                        message=(
+                            f"array_group_id {link.array_group_id} must resolve to at least 2 "
+                            f"TDOA/AOA_DOA receivers in this ScenarioVersion's receivers, found "
+                            f"{len(members)}"
+                        ),
+                        path=path,
+                    )
+                )
+
+    return findings
+
+
 def validate_scenario_version(version: ScenarioVersion) -> list[ValidationFinding]:
     """Run cross-entity consistency checks over a ScenarioVersion.
 
     Structural invariants already enforced by pydantic validators on the
     individual models are not repeated here.
     """
-    findings: list[ValidationFinding] = []
+    findings: list[ValidationFinding] = list(_coherent_group_findings(version))
 
     # No dangling-recording-reference check here: ScenarioVersion.recordings
     # is always derived from these same emissions

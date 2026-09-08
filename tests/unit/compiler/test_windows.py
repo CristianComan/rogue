@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from uuid import uuid4
 
 from compiler_factories import (
     make_capability_profile,
     make_link,
     make_mission,
+    make_receiver,
     make_recording,
     make_scenario_version,
     recording_key,
 )
 
 from rogue.compiler.windows import compute_rf_windows
+from rogue.domain.receiver import ReceiverType
 from rogue.domain.rf import RfBand, RfEmission, ScriptedFrequencyChange
 from rogue.domain.validation import ValidationSeverity
 
@@ -142,6 +145,51 @@ def test_bandwidth_exceeding_every_channel_is_blocking() -> None:
     assert "rf_window_infeasible" in codes
     finding = next(f for f in findings if f.code == "rf_window_infeasible")
     assert finding.severity == ValidationSeverity.BLOCKING
+
+
+def test_coherent_link_expands_into_separate_windows_per_element() -> None:
+    recording = make_recording(sample_rate_hz=1_000_000.0, duration_s=100.0)
+    group_id = uuid4()
+    link = make_link(recording.reference(), array_group_id=group_id)
+    mission = make_mission([link])
+    rx_a = make_receiver(ReceiverType.AOA_DOA, array_group_id=group_id, element_index=0)
+    rx_b = make_receiver(ReceiverType.AOA_DOA, array_group_id=group_id, element_index=1)
+    version = make_scenario_version([mission], [recording.reference()], receivers=[rx_a, rx_b])
+    recordings = {recording_key(recording.reference()): recording}
+    profile = make_capability_profile()
+
+    windows, findings = compute_rf_windows(
+        version, recordings, duration_s=10.0, capability_profile=profile
+    )
+
+    assert findings == []
+    # Same frequency, same link — would normally merge into one window
+    # (like test_two_close_links_share_one_window above); the coherent
+    # group guard must keep them separate since each needs its own
+    # physical channel.
+    assert len(windows) == 2
+    assert all(len(w.channels) == 1 for w in windows)
+    receiver_ids = {w.channels[0].array_element_receiver_id for w in windows}
+    assert receiver_ids == {rx_a.id, rx_b.id}
+    window_keys = {w.window_key for w in windows}
+    assert len(window_keys) == 2  # per-element window_key stays unique
+    assert all(w.channels[0].coherent_group_id == group_id for w in windows)
+
+
+def test_non_coherent_link_unaffected_by_coherent_group_support() -> None:
+    recording = make_recording(sample_rate_hz=1_000_000.0, duration_s=100.0)
+    link = make_link(recording.reference())  # no array_group_id
+    version = make_scenario_version([make_mission([link])], [recording.reference()])
+    recordings = {recording_key(recording.reference()): recording}
+    profile = make_capability_profile()
+
+    windows, findings = compute_rf_windows(
+        version, recordings, duration_s=10.0, capability_profile=profile
+    )
+
+    assert findings == []
+    assert len(windows) == 1
+    assert windows[0].channels[0].coherent_group_id is None
 
 
 def test_idle_link_contributes_no_window() -> None:

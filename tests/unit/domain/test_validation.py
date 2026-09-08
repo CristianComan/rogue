@@ -8,11 +8,13 @@ from uuid import uuid4
 from factories import (
     drone_mission_kwargs,
     drone_rf_link_kwargs,
+    make_receiver,
     recording_reference,
     scenario_version_kwargs,
 )
 
 from rogue.domain.mission import DroneMission
+from rogue.domain.receiver import ReceiverType
 from rogue.domain.rf import DroneRfLink, RfEmission
 from rogue.domain.scenario import ScenarioVersion
 from rogue.domain.timeline import MissionRelativeAnchor, MissionRelativeTimelineEvent
@@ -110,6 +112,55 @@ def test_silence_span_does_not_trigger_dangling_recording_reference() -> None:
     findings = validate_scenario_version(version)
 
     assert all(f.severity != ValidationSeverity.BLOCKING for f in findings)
+
+
+def test_coherent_link_with_unresolvable_array_group_is_blocking() -> None:
+    ref = recording_reference()
+    link = DroneRfLink(**drone_rf_link_kwargs(recording=ref, array_group_id=uuid4()))
+    mission = DroneMission(**drone_mission_kwargs(recording=ref, rf_links=[link]))
+    version = ScenarioVersion(
+        **scenario_version_kwargs(missions=[mission], recordings=[ref], receivers=[])
+    )
+
+    findings = validate_scenario_version(version)
+
+    codes = {f.code for f in findings if f.severity == ValidationSeverity.BLOCKING}
+    assert "coherent_group_unresolvable" in codes
+
+
+def test_coherent_link_referencing_only_one_array_receiver_is_blocking() -> None:
+    ref = recording_reference()
+    group_id = uuid4()
+    link = DroneRfLink(**drone_rf_link_kwargs(recording=ref, array_group_id=group_id))
+    mission = DroneMission(**drone_mission_kwargs(recording=ref, rf_links=[link]))
+    receiver = make_receiver(ReceiverType.TDOA, array_group_id=group_id)
+    version = ScenarioVersion(
+        **scenario_version_kwargs(missions=[mission], recordings=[ref], receivers=[receiver])
+    )
+
+    findings = validate_scenario_version(version)
+
+    codes = {f.code for f in findings if f.severity == ValidationSeverity.BLOCKING}
+    assert "coherent_group_unresolvable" in codes
+
+
+def test_coherent_link_with_valid_tdoa_array_group_is_not_blocking() -> None:
+    ref = recording_reference()
+    group_id = uuid4()
+    link = DroneRfLink(**drone_rf_link_kwargs(recording=ref, array_group_id=group_id))
+    mission = DroneMission(**drone_mission_kwargs(recording=ref, rf_links=[link]))
+    receivers = [
+        make_receiver(ReceiverType.TDOA, array_group_id=group_id, element_index=0),
+        make_receiver(ReceiverType.TDOA, array_group_id=group_id, element_index=1),
+    ]
+    version = ScenarioVersion(
+        **scenario_version_kwargs(missions=[mission], recordings=[ref], receivers=receivers)
+    )
+
+    findings = validate_scenario_version(version)
+
+    codes = {f.code for f in findings if f.severity == ValidationSeverity.BLOCKING}
+    assert "coherent_group_unresolvable" not in codes
 
 
 def test_empty_scenario_produces_warning_not_blocking() -> None:
