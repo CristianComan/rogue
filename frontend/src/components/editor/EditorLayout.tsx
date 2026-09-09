@@ -105,6 +105,7 @@ export function EditorLayout({
             <SpatialPanel
               content={content}
               scenarioTimeSeconds={scenarioTimeSeconds}
+              maxSeconds={maxSeconds}
               selection={selection}
               onSelect={select}
             />
