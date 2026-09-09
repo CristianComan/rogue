@@ -1,14 +1,14 @@
 import { useRunTime } from "../../state/runTimeContext";
-import { colors, monoFontStack, sectionHeadingStyle } from "../../styles/tokens";
+import { toneVars, type Tone } from "../../styles/tokens";
 import type { RunEvent } from "../../domain/run";
 
 const CRITICAL_KINDS = new Set(["error", "emergency_stopped"]);
 
-function eventColor(event: RunEvent): string {
-  if (CRITICAL_KINDS.has(event.kind)) return colors.severity.critical;
-  if (event.severity === "blocking") return colors.severity.blocking;
-  if (event.severity === "warning") return colors.severity.warning;
-  return colors.severity.info;
+function eventTone(event: RunEvent): Tone {
+  if (CRITICAL_KINDS.has(event.kind)) return "bad";
+  if (event.severity === "blocking") return "bad";
+  if (event.severity === "warning") return "warn";
+  return "info";
 }
 
 function eventLabel(event: RunEvent): string {
@@ -25,40 +25,77 @@ function eventLabel(event: RunEvent): string {
 export function WatchdogFeed() {
   const { run } = useRunTime();
   const sorted = [...run.events].sort((a, b) => b.sequence - a.sequence);
+  const isLive = run.status === "running" || run.status === "armed";
 
   return (
-    <div style={{ fontFamily: monoFontStack, fontSize: 12 }}>
-      <div style={{ ...sectionHeadingStyle, padding: "8px 12px 4px" }}>Watchdog & safety feed</div>
-      {sorted.length === 0 && (
-        <div style={{ padding: "0 12px 8px", color: colors.textMuted }}>
-          No events recorded yet.
-        </div>
-      )}
-      <div style={{ maxHeight: 260, overflowY: "auto" }}>
-        {sorted.map((event) => (
-          <div
-            key={event.id}
+    <div style={{ font: "400 11.5px/1.4 var(--mono)" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "8px 12px",
+          borderBottom: "1px solid var(--line)",
+          font: "600 11px/1 var(--mono)",
+          letterSpacing: "0.04em",
+        }}
+      >
+        Watchdog &amp; safety feed
+        {isLive && (
+          <span
             style={{
-              display: "flex",
-              gap: 8,
-              padding: "4px 12px",
-              borderLeft: `3px solid ${eventColor(event)}`,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              color: "var(--ok-fg)",
+              fontWeight: 500,
             }}
           >
-            <span style={{ color: colors.textMuted, whiteSpace: "nowrap" }}>
-              {new Date(event.at).toLocaleTimeString()}
-            </span>
-            <span style={{ color: eventColor(event), fontWeight: 700, whiteSpace: "nowrap" }}>
-              {eventLabel(event)}
-            </span>
-            <span style={{ color: colors.textMuted, whiteSpace: "nowrap" }}>
-              {event.device_id
-                ? `${event.device_id}${event.channel_index !== null ? `/ch${event.channel_index}` : ""}`
-                : event.kind}
-            </span>
-            <span>{event.message}</span>
-          </div>
-        ))}
+            <span
+              aria-hidden
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background: "var(--ok-fg)",
+                animation: "livepulse 1.6s ease-in-out infinite",
+              }}
+            />
+            live
+          </span>
+        )}
+      </div>
+      {sorted.length === 0 && (
+        <div style={{ padding: "8px 12px", color: "var(--ink-3)" }}>No events recorded yet.</div>
+      )}
+      <div style={{ maxHeight: 260, overflowY: "auto" }}>
+        {sorted.map((event) => {
+          const vars = toneVars(eventTone(event));
+          return (
+            <div
+              key={event.id}
+              style={{
+                display: "flex",
+                gap: 8,
+                padding: "4px 12px",
+                borderLeft: `3px solid ${vars.bd}`,
+              }}
+            >
+              <span style={{ color: "var(--ink-3)", whiteSpace: "nowrap" }}>
+                {new Date(event.at).toLocaleTimeString()}
+              </span>
+              <span style={{ color: vars.fg, fontWeight: 600, whiteSpace: "nowrap" }}>
+                {eventLabel(event)}
+              </span>
+              <span style={{ color: "var(--ink-3)", whiteSpace: "nowrap" }}>
+                {event.device_id
+                  ? `${event.device_id}${event.channel_index !== null ? `/ch${event.channel_index}` : ""}`
+                  : event.kind}
+              </span>
+              <span>{event.message}</span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

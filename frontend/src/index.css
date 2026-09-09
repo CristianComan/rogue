@@ -1,14 +1,137 @@
+/*
+ * ROGUE design tokens — ported directly from the "ROGUE Console" Claude
+ * Design canvas (docs/architecture/design/ROGUE Console.dc.html): a warm
+ * neutral surface palette (not cool gray), IBM Plex Sans/Mono, oklch
+ * fg/bg/border status triads, a dark left nav rail with a collapsible
+ * secondary sub-nav panel, and a real light/dark theme switched via
+ * `[data-rogue-theme]` on the root element (see NavRail's theme toggle).
+ */
 :root {
   color-scheme: light dark;
-  font:
-    14px/1.4 system-ui,
-    "Segoe UI",
-    Roboto,
-    sans-serif;
+  --sans:
+    "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: 13px/1.4 var(--sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  --bg: #efeeec;
+  --surface: #ffffff;
+  --surface-2: #f8f7f6;
+  --surface-3: #f1f0ee;
+  --line: #e0dedb;
+  --line-2: #cbc8c4;
+  --ink: #1c1b19;
+  --ink-2: #575450;
+  --ink-3: #8b8781;
+  --accent: oklch(0.52 0.13 245);
+  --accent-2: oklch(0.52 0.13 300);
+  --accent-soft: oklch(0.96 0.025 245);
+  --rail: #201f1e;
+  --rail-ink: #cfccc8;
+  --map: #e6e4e0;
+  --map-line: rgba(30, 28, 26, 0.09);
+  --wf: #111417;
+  --ok-fg: oklch(0.44 0.11 150);
+  --ok-bg: oklch(0.96 0.03 150);
+  --ok-bd: oklch(0.85 0.06 150);
+  --warn-fg: oklch(0.46 0.11 65);
+  --warn-bg: oklch(0.96 0.04 75);
+  --warn-bd: oklch(0.85 0.07 75);
+  --bad-fg: oklch(0.48 0.15 25);
+  --bad-bg: oklch(0.96 0.03 25);
+  --bad-bd: oklch(0.86 0.07 25);
+  --info-fg: oklch(0.46 0.12 245);
+  --info-bg: oklch(0.96 0.03 245);
+  --info-bd: oklch(0.86 0.06 245);
+  --mute-fg: #6c6864;
+  --mute-bg: #f2f1ef;
+  --mute-bd: #dcd9d5;
+
+  /* Row density, toggled by NavRail's density button */
+  --rp: 7px;
+  --nav-width: 52px;
+  --subnav-width: 206px;
+
+  /* --- Back-compat aliases onto the canonical tokens above ---
+     Kept so components not yet rewritten against the canvas's own naming
+     still resolve to the right colors instead of silently going
+     transparent; new/rewritten components should use the canonical names
+     (--bg/--surface/--ink/--line/--ok-fg etc.) directly. */
+  --surface-canvas: var(--bg);
+  --surface-card: var(--surface);
+  --surface-sunken: var(--surface-3);
+  --surface-nav: var(--rail);
+  --surface-selected: var(--accent-soft);
+  --surface-overlay: rgba(20, 18, 16, 0.28);
+  --border-default: var(--line-2);
+  --border-subtle: var(--line);
+  --border-strong: var(--line-2);
+  --text-primary: var(--ink);
+  --text-secondary: var(--ink-2);
+  --text-tertiary: var(--ink-3);
+  --text-on-accent: #fff;
+  --accent-hover: var(--accent-2);
+  --accent-text: var(--accent);
+  --status-success: var(--ok-fg);
+  --status-success-bg: var(--ok-bg);
+  --status-warning: var(--warn-fg);
+  --status-warning-bg: var(--warn-bg);
+  --status-danger: var(--bad-fg);
+  --status-danger-bg: var(--bad-bg);
+  --status-info: var(--info-fg);
+  --status-info-bg: var(--info-bg);
+  --status-neutral: var(--mute-fg);
+  --status-neutral-bg: var(--mute-bg);
+  --radius: 2px;
+  --font-mono: var(--mono);
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+}
+
+:root[data-rogue-theme="dark"] {
+  --bg: #121110;
+  --surface: #1b1a19;
+  --surface-2: #211f1e;
+  --surface-3: #282625;
+  --line: #332f2d;
+  --line-2: #453f3c;
+  --ink: #f1efec;
+  --ink-2: #b3ada7;
+  --ink-3: #807a74;
+  --accent: oklch(0.72 0.12 245);
+  --accent-2: oklch(0.72 0.12 300);
+  --accent-soft: oklch(0.32 0.05 245);
+  --rail: #0d0c0c;
+  --rail-ink: #b8b4af;
+  --map: #191d20;
+  --map-line: rgba(255, 255, 255, 0.06);
+  --wf: #0a0c0e;
+  --ok-fg: oklch(0.82 0.12 150);
+  --ok-bg: oklch(0.28 0.05 150);
+  --ok-bd: oklch(0.4 0.07 150);
+  --warn-fg: oklch(0.84 0.12 80);
+  --warn-bg: oklch(0.3 0.05 70);
+  --warn-bd: oklch(0.42 0.07 70);
+  --bad-fg: oklch(0.78 0.14 25);
+  --bad-bg: oklch(0.3 0.07 25);
+  --bad-bd: oklch(0.44 0.1 25);
+  --info-fg: oklch(0.82 0.1 245);
+  --info-bg: oklch(0.29 0.05 245);
+  --info-bd: oklch(0.42 0.07 245);
+  --mute-fg: #9b958f;
+  --mute-bg: #262423;
+  --mute-bd: #3a3634;
+}
+
+*{
+  box-sizing: border-box;
 }
 
 /* This is an application shell, not a scrolling document: html/body/#root
@@ -25,6 +148,107 @@ body,
 
 body {
   overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--accent-2);
+  text-decoration: underline;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line-2);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+@keyframes wfscan {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(900%);
+  }
+}
+@keyframes livepulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Flat, subtle-border baseline. Components needing a stronger/danger
+   variant apply data-variant on top. */
+button {
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: 2px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+button[data-variant="primary"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+button[data-variant="primary"]:hover:not(:disabled) {
+  filter: brightness(0.94);
+}
+button[data-variant="danger"] {
+  background: var(--bad-fg);
+  border-color: var(--bad-fg);
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+button[data-variant="danger"]:hover:not(:disabled) {
+  filter: brightness(0.92);
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: 2px;
+  padding: 5px 8px;
+}
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+table {
+  border-collapse: collapse;
 }
 
 /* Browsers default <fieldset> to min-width: min-content, which refuses to

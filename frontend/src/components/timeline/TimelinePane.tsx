@@ -1,6 +1,6 @@
 import type { TimelineEvent } from "../../domain/types";
 import type { Selection } from "../../state/selection";
-import { sectionHeadingStyle } from "../../styles/tokens";
+import { Card } from "../shell/Card";
 import { TimelineEventsListEditor } from "../properties/TimelineEventsListEditor";
 import { PlaybackControls } from "./PlaybackControls";
 import { ScrubBar } from "./ScrubBar";
@@ -26,15 +26,14 @@ export function TimelinePane({
   onSelect: (selection: Selection) => void;
 }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column" }}>
-      <div style={{ display: "flex", alignItems: "center" }}>
+    <Card title="Timeline" noPadding>
+      <div style={{ display: "flex", alignItems: "center", padding: "6px 12px" }}>
         <PlaybackControls />
         <div style={{ flex: 1 }}>
           <ScrubBar maxSeconds={maxSeconds} />
         </div>
       </div>
-      <div style={{ ...sectionHeadingStyle, padding: "4px 12px 0" }}>Timeline events</div>
       <TimelineEventsListEditor events={events} selection={selection} onSelect={onSelect} />
-    </div>
+    </Card>
   );
 }

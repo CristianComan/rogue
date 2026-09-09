@@ -27,6 +27,13 @@ export interface CompositeChannel {
   bandwidth_hz: number;
   gain_offset_db: number;
   recording: RecordingReference;
+  // Coherent-group allocation fields (ADR-012) — null for an ordinary,
+  // non-coherent channel; set together for one array element's entry when
+  // the owning link is part of a TDOA/AOA_DOA coherent group.
+  coherent_group_id: string | null;
+  array_element_receiver_id: string | null;
+  phase_offset_rad: number | null;
+  delay_offset_s: number | null;
 }
 
 // mirrors backend/rogue/compiler/models.py:RfWindow

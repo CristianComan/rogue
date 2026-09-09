@@ -163,7 +163,7 @@ export function ScenarioToolbar({
           + Timeline event
         </button>
         <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 12, color: "#4c5c5e" }}>
+        <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
           revision {state.revision}
           {state.dirty ? " · unsaved changes" : " · saved"}
         </span>
@@ -173,16 +173,23 @@ export function ScenarioToolbar({
         <button type="button" onClick={onValidate} disabled={validating}>
           {validating ? "Validating…" : "Validate"}
         </button>
-        <button type="button" onClick={onPublish} disabled={publishing || state.dirty}>
+        <button
+          type="button"
+          data-variant="primary"
+          onClick={onPublish}
+          disabled={publishing || state.dirty}
+        >
           {publishing ? "Publishing…" : "Publish"}
         </button>
       </div>
-      {saveError && <div style={{ color: "crimson", fontSize: 12 }}>{saveError}</div>}
+      {saveError && <div style={{ color: "var(--status-danger)", fontSize: 12 }}>{saveError}</div>}
       {state.dirty && (
-        <div style={{ fontSize: 11, color: "#4c5c5e" }}>Save your changes before publishing.</div>
+        <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+          Save your changes before publishing.
+        </div>
       )}
       {publishedVersionNumber !== null && state.scenarioId && (
-        <div style={{ fontSize: 12, color: "#2c7a63" }}>
+        <div style={{ fontSize: 12, color: "var(--status-success)" }}>
           Published version {publishedVersionNumber}.{" "}
           <Link to={`/scenarios/${state.scenarioId}/versions/${publishedVersionNumber}`}>
             View published version

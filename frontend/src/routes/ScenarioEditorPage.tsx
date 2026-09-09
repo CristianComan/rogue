@@ -4,6 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { ConflictError, PublishBlockedError } from "../api/client";
 import {
   createDraft,
+  getScenario,
   getVersion,
   listVersions,
   publishDraft,
@@ -14,6 +15,7 @@ import { EditorLayout } from "../components/editor/EditorLayout";
 import { PublishBlockedDialog } from "../components/editor/PublishBlockedDialog";
 import { ScenarioToolbar } from "../components/editor/ScenarioToolbar";
 import { ValidationFindingsPanel } from "../components/editor/ValidationFindingsPanel";
+import { AppShell } from "../components/shell/AppShell";
 import { scenarioDurationSeconds } from "../domain/missionEvaluator";
 import type { ValidationFinding } from "../domain/types";
 import {
@@ -42,6 +44,16 @@ export function ScenarioEditorPage() {
   const [publishing, setPublishing] = useState(false);
   const [publishedVersionNumber, setPublishedVersionNumber] = useState<number | null>(null);
   const [blockedFindings, setBlockedFindings] = useState<ValidationFinding[] | null>(null);
+  const [scenarioName, setScenarioName] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!scenarioId) return;
+    getScenario(scenarioId)
+      .then((s) => setScenarioName(s.name))
+      .catch(() => {
+        // Breadcrumb falls back to a generic label — not fatal to the editor.
+      });
+  }, [scenarioId]);
 
   useEffect(() => {
     if (!scenarioId) return;
@@ -142,50 +154,61 @@ export function ScenarioEditorPage() {
   return (
     <SelectionProvider>
       <ScenarioTimeProvider maxSeconds={maxSeconds}>
-        <div
-          data-draft-id={state.draftId ?? undefined}
-          style={{ display: "flex", flexDirection: "column", height: "100%" }}
-        >
-          <div style={{ padding: 8, borderBottom: "1px solid #ccc", display: "flex", gap: 12 }}>
-            <button type="button" onClick={() => navigate("/")}>
-              ← Library
-            </button>
-            <strong>ROGUE Scenario Editor</strong>
-            {scenarioId && (
-              <button
-                type="button"
-                onClick={() => navigate(`/scenarios/${scenarioId}/replay`)}
-                style={{ marginLeft: "auto" }}
-              >
+        <AppShell
+          scroll={false}
+          breadcrumb={[
+            { label: "Scenario Library", to: "/" },
+            { label: scenarioName ?? "Scenario" },
+          ]}
+          actions={
+            scenarioId && (
+              <button type="button" onClick={() => navigate(`/scenarios/${scenarioId}/replay`)}>
                 Replay →
               </button>
+            )
+          }
+        >
+          <div
+            data-draft-id={state.draftId ?? undefined}
+            style={{ display: "flex", flexDirection: "column", height: "100%" }}
+          >
+            {loadError && (
+              <div
+                style={{
+                  padding: "8px 20px",
+                  background: "var(--status-danger-bg)",
+                  color: "var(--status-danger)",
+                  fontSize: 13,
+                }}
+              >
+                {loadError}
+              </div>
             )}
-            {loadError && <span style={{ color: "crimson" }}>{loadError}</span>}
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <EditorBody
+                state={state}
+                dispatch={dispatch}
+                maxSeconds={maxSeconds}
+                onSave={handleSave}
+                saving={saving}
+                saveError={saveError}
+                onValidate={handleValidate}
+                validating={validating}
+                validationFindings={validationFindings}
+                onPublish={handlePublish}
+                publishing={publishing}
+                publishedVersionNumber={publishedVersionNumber}
+              />
+            </div>
+            {blockedFindings && (
+              <PublishBlockedDialogHost
+                findings={blockedFindings}
+                content={state.content}
+                onClose={() => setBlockedFindings(null)}
+              />
+            )}
           </div>
-          <div style={{ flex: 1, minHeight: 0 }}>
-            <EditorBody
-              state={state}
-              dispatch={dispatch}
-              maxSeconds={maxSeconds}
-              onSave={handleSave}
-              saving={saving}
-              saveError={saveError}
-              onValidate={handleValidate}
-              validating={validating}
-              validationFindings={validationFindings}
-              onPublish={handlePublish}
-              publishing={publishing}
-              publishedVersionNumber={publishedVersionNumber}
-            />
-          </div>
-          {blockedFindings && (
-            <PublishBlockedDialogHost
-              findings={blockedFindings}
-              content={state.content}
-              onClose={() => setBlockedFindings(null)}
-            />
-          )}
-        </div>
+        </AppShell>
       </ScenarioTimeProvider>
     </SelectionProvider>
   );

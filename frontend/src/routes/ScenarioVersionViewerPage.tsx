@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { getVersion } from "../api/scenarios";
 import { MapCanvas } from "../components/map/MapCanvas";
+import { AppShell } from "../components/shell/AppShell";
+import { Card } from "../components/shell/Card";
 import { ScenarioTimeProvider, useScenarioTime } from "../state/scenarioTimeContext";
 import { scenarioDurationSeconds } from "../domain/missionEvaluator";
 import type { ScenarioVersion } from "../domain/types";
@@ -9,7 +11,6 @@ import type { ScenarioVersion } from "../domain/types";
 /** Read-only render of one immutable published ScenarioVersion. */
 export function ScenarioVersionViewerPage() {
   const { scenarioId, versionNumber } = useParams<{ scenarioId: string; versionNumber: string }>();
-  const navigate = useNavigate();
   const [version, setVersion] = useState<ScenarioVersion | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -24,31 +25,41 @@ export function ScenarioVersionViewerPage() {
 
   return (
     <ScenarioTimeProvider maxSeconds={maxSeconds}>
-      <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
-        <div
-          style={{
-            padding: 12,
-            borderBottom: "1px solid #ccc",
-            display: "flex",
-            gap: 12,
-            alignItems: "center",
-          }}
-        >
-          <button type="button" onClick={() => navigate(`/scenarios/${scenarioId}`)}>
-            ← Editor
-          </button>
-          <strong>Published version {versionNumber}</strong>
-          {error && <span style={{ color: "crimson" }}>{error}</span>}
-          {version && (
-            <span>
+      <AppShell
+        scroll={false}
+        breadcrumb={[
+          { label: "Scenario Library", to: "/" },
+          { label: "Scenario", to: `/scenarios/${scenarioId}` },
+          { label: `Version ${versionNumber}` },
+        ]}
+        actions={
+          version && (
+            <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
               {version.missions.length} mission(s), {version.receivers.length} receiver(s)
             </span>
+          )
+        }
+      >
+        <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+          {error && (
+            <div
+              style={{
+                padding: "8px 20px",
+                background: "var(--status-danger-bg)",
+                color: "var(--status-danger)",
+                fontSize: 13,
+              }}
+            >
+              {error}
+            </div>
           )}
+          <div style={{ flex: 1, minHeight: 0, padding: "var(--space-2)" }}>
+            <Card noPadding style={{ height: "100%" }} bodyStyle={{ height: "100%" }}>
+              <MapCanvasWithTime version={version} />
+            </Card>
+          </div>
         </div>
-        <div style={{ flex: 1, minHeight: 0 }}>
-          <MapCanvasWithTime version={version} />
-        </div>
-      </div>
+      </AppShell>
     </ScenarioTimeProvider>
   );
 }
@@ -67,7 +78,7 @@ function MapCanvasWithTime({ version }: { version: ScenarioVersion | null }) {
           scenarioTimeSeconds={scenarioTimeSeconds}
         />
       </div>
-      <div style={{ padding: 12, borderTop: "1px solid #ccc" }}>
+      <div style={{ padding: 12, borderTop: "1px solid var(--border-subtle)" }}>
         <input
           type="range"
           min={0}
@@ -78,7 +89,9 @@ function MapCanvasWithTime({ version }: { version: ScenarioVersion | null }) {
           style={{ width: "100%" }}
           disabled={!version}
         />
-        <div>
+        <div
+          style={{ fontSize: 12, color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}
+        >
           t = {scenarioTimeSeconds.toFixed(1)}s / {maxSeconds.toFixed(1)}s
         </div>
       </div>
