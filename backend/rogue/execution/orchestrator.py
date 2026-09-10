@@ -12,11 +12,13 @@ the real distributed Agent work (M8).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import asyncio
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from rogue.compiler.models import Allocation, ReplayPlan, RfWindow
 from rogue.domain.recording import IQRecording
+from rogue.domain.rf import TimingSyncClass
 from rogue.domain.run import DeviceLease, RunEvent, RunEventKind, RunStatus, ScenarioRun
 from rogue.domain.validation import ValidationSeverity
 from rogue.execution.adapter import AdapterOperationError, SDRAdapter
@@ -26,6 +28,15 @@ from rogue.execution.adapter import AdapterOperationError, SDRAdapter
 # so an unrenewed lease only lapses if the control plane itself has stopped
 # advancing runs.
 LEASE_TTL_SECONDS = 30.0
+
+# M11 (ADR-013): how far into the future a synchronized barrier start is
+# scheduled — generous enough to cover NATS round-trip + per-Agent dispatch
+# to every channel before any of them needs to actually fire. Settle margin
+# is the extra wait past the barrier before polling each channel's
+# `actual_tx_start_at`, so a channel that fires right at the barrier is
+# reliably observed rather than raced.
+BARRIER_MARGIN_SECONDS = 0.5
+BARRIER_SETTLE_MARGIN_SECONDS = 0.2
 
 
 class InvalidRunTransitionError(Exception):
@@ -226,8 +237,20 @@ async def start_run(run: ScenarioRun, plan: ReplayPlan, adapter: SDRAdapter) -> 
     if run.status != RunStatus.ARMED:
         raise InvalidRunTransitionError(RunStatus.ARMED, run.status, "start")
 
+    channels = list(_first_allocation_per_channel(plan))
+    if plan.required_sync_class == TimingSyncClass.L0_SIMULATED:
+        return await _start_sequential(run, channels, adapter)
+    return await _start_with_barrier(run, plan, channels, adapter)
+
+
+async def _start_sequential(
+    run: ScenarioRun, channels: list[tuple[str, int]], adapter: SDRAdapter
+) -> ScenarioRun:
+    """No synchronization requested (the default) — behavior is identical
+    to before M11 existed: one channel at a time, no barrier.
+    """
     builder = _RunBuilder(run)
-    for device_id, channel_index in _first_allocation_per_channel(plan):
+    for device_id, channel_index in channels:
         try:
             await adapter.start(device_id, channel_index)
         except AdapterOperationError as exc:
@@ -237,6 +260,80 @@ async def start_run(run: ScenarioRun, plan: ReplayPlan, adapter: SDRAdapter) -> 
             f"started {device_id}:{channel_index}",
             device_id=device_id,
             channel_index=channel_index,
+        )
+    return builder.advance(RunStatus.RUNNING)
+
+
+async def _start_with_barrier(
+    run: ScenarioRun,
+    plan: ReplayPlan,
+    channels: list[tuple[str, int]],
+    adapter: SDRAdapter,
+) -> ScenarioRun:
+    """A software-barrier synchronized start (M11, ADR-013): every channel's
+    `start()` is issued *concurrently*, each carrying the same future
+    `barrier_at`, then this waits past that instant and reads back each
+    channel's actual fire time to measure the achieved skew — the
+    "measured," not just "declared," half of M11's exit criterion.
+
+    L1 (software barrier) is the best class actually achievable today —
+    neither vendor adapter exposes any PPS/PTP capability — so that's what
+    runs here regardless of whether the scenario asked for L1, L2, L3 or
+    L4; the compiler already warned at compile time if L3/L4 was requested
+    (`sync_class_not_achievable`). This function's job is only to execute
+    and measure, not to re-litigate what's achievable.
+    """
+    builder = _RunBuilder(run)
+    barrier_at = datetime.now(UTC) + timedelta(seconds=BARRIER_MARGIN_SECONDS)
+
+    start_results = await asyncio.gather(
+        *(
+            adapter.start(device_id, channel_index, barrier_at=barrier_at)
+            for device_id, channel_index in channels
+        ),
+        return_exceptions=True,
+    )
+    for (device_id, channel_index), result in zip(channels, start_results, strict=True):
+        if isinstance(result, AdapterOperationError):
+            return builder.fail(str(result), device_id=device_id, channel_index=channel_index)
+        if isinstance(result, BaseException):
+            raise result
+        builder.event(
+            RunEventKind.STARTED,
+            f"scheduled barrier start for {device_id}:{channel_index} at {barrier_at.isoformat()}",
+            device_id=device_id,
+            channel_index=channel_index,
+        )
+
+    settle_seconds = (
+        barrier_at - datetime.now(UTC)
+    ).total_seconds() + BARRIER_SETTLE_MARGIN_SECONDS
+    if settle_seconds > 0:
+        await asyncio.sleep(settle_seconds)
+
+    statuses = await asyncio.gather(
+        *(adapter.status(device_id, channel_index) for device_id, channel_index in channels)
+    )
+    for (device_id, channel_index), status in zip(channels, statuses, strict=True):
+        if status.last_error is not None:
+            return builder.fail(status.last_error, device_id=device_id, channel_index=channel_index)
+
+    actual_times = [s.actual_tx_start_at for s in statuses if s.actual_tx_start_at is not None]
+    if len(actual_times) < len(channels):
+        builder.event(
+            RunEventKind.SYNC_MEASURED,
+            f"barrier start requested {plan.required_sync_class.value}: only "
+            f"{len(actual_times)}/{len(channels)} channel(s) had reported an actual start time "
+            "by the settle deadline",
+            severity=ValidationSeverity.WARNING,
+        )
+    else:
+        skew_seconds = (max(actual_times) - min(actual_times)).total_seconds()
+        builder.event(
+            RunEventKind.SYNC_MEASURED,
+            f"barrier start requested {plan.required_sync_class.value}, executed via "
+            f"{TimingSyncClass.L1_SOFTWARE_BARRIER.value}: measured skew "
+            f"{skew_seconds * 1000:.1f} ms across {len(channels)} channel(s)",
         )
     return builder.advance(RunStatus.RUNNING)
 

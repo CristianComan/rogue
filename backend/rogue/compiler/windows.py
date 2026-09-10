@@ -23,7 +23,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from uuid import uuid4
 
-from rogue.compiler.coherent_groups import expand_occupied_bands
+from rogue.compiler.coherent_groups import compute_doppler_schedule, expand_occupied_bands
 from rogue.compiler.frequency import realize_frequency_timeline
 from rogue.compiler.models import (
     CompilerFinding,
@@ -140,6 +140,58 @@ def _pack_bands(
     return windows, findings
 
 
+def _attach_doppler_schedules(
+    windows: list[RfWindow], version: ScenarioVersion
+) -> tuple[list[RfWindow], list[CompilerFinding]]:
+    """Fill in each coherent channel's ``doppler_schedule`` (M12, ADR-013),
+    now that every window's true final ``[start_seconds, end_seconds)``
+    span is known — window-coalescing above can extend a span past the one
+    instant ``rogue.compiler.coherent_groups.expand_occupied_bands`` saw it
+    at, so only this later, whole-window pass can span it correctly.
+    """
+    findings: list[CompilerFinding] = []
+    receivers_by_id = {r.id: r for r in version.receivers}
+    missions_by_id = {m.id: m for m in version.missions}
+
+    result: list[RfWindow] = []
+    for window in windows:
+        updated_channels: list[CompositeChannel] = []
+        for channel in window.channels:
+            if channel.array_element_receiver_id is None:
+                updated_channels.append(channel)
+                continue
+            receiver = receivers_by_id.get(channel.array_element_receiver_id)
+            mission = missions_by_id.get(channel.mission_id)
+            if receiver is None or mission is None:
+                updated_channels.append(channel)
+                continue
+            try:
+                schedule = compute_doppler_schedule(
+                    receiver,
+                    mission,
+                    window.start_seconds,
+                    window.end_seconds,
+                    channel.center_frequency_hz,
+                )
+            except NotImplementedError as exc:
+                findings.append(
+                    CompilerFinding(
+                        severity=ValidationSeverity.BLOCKING,
+                        code="coherent_group_doppler_unresolvable",
+                        message=(
+                            f"cannot compute Doppler schedule for link {channel.link_id} in "
+                            f"window {window.window_key}: {exc}"
+                        ),
+                        path="$",
+                    )
+                )
+                updated_channels.append(channel)
+                continue
+            updated_channels.append(channel.model_copy(update={"doppler_schedule": schedule}))
+        result.append(window.model_copy(update={"channels": updated_channels}))
+    return result, findings
+
+
 def compute_rf_windows(
     version: ScenarioVersion,
     recordings: Mapping[RecordingKey, IQRecording],
@@ -212,4 +264,7 @@ def compute_rf_windows(
 
     closed_windows.extend(open_windows.values())
     closed_windows.sort(key=lambda w: (w.start_seconds, w.window_key))
-    return closed_windows, findings
+
+    with_doppler, doppler_findings = _attach_doppler_schedules(closed_windows, version)
+    findings.extend(doppler_findings)
+    return with_doppler, findings

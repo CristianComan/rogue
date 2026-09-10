@@ -20,9 +20,9 @@ Build ROGUE in bounded, testable increments. Do not begin with hardware-specific
 | M8 | Distributed SDR Agent | leases, cache, protocol, watchdog, telemetry | Done — `feature/distributed-sdr-agent` |
 | M9 | First real adapter | cabled/attenuated replay on one supported device | Code complete, **hardware-unverified** — `feature/x440-real-adapter` (see ADR-009) |
 | M10 | X440 + AIR7311 capability-based scheduling | both hardware families behind common interface | **AIR7311 side hardware-verified 2026-09-08** (live discovery, `live-agent-registry` scheduling, and a full `reserve->prefetch->configure->arm->start->stop` cycle with real cabled/attenuated TX — see ADR-010, ADR-011); X440 side still **code complete, hardware-unverified** — `feature/air7311-and-capability-scheduling` |
-| M11 | Multi-SDR synchronization | declared timing class demonstrated and measured | Planned |
-| M12 | Doppler/delay/phase processing | receiver-specific streams validated | Planned |
-| M13 | TDOA/AOA receiver stimulation | relative delay/phase requirements demonstrated | Planned |
+| M11 | Multi-SDR synchronization | declared timing class demonstrated and measured | L1 (software barrier) demonstrated and measured in simulation; L3/L4 declared but not achievable with current Agent capability — see ADR-012, ADR-013 |
+| M12 | Doppler/delay/phase processing | receiver-specific streams validated | Coherent-group Doppler-driven phase (continuous NCO) + piecewise delay applied during streaming, verified against a fake device seam — **hardware-unverified** — see ADR-012, ADR-013 |
+| M13 | TDOA/AOA receiver stimulation | relative delay/phase requirements demonstrated | Domain + compiler + execution-layer code complete (coherent-group allocation, Δφ/τ computation, streaming DSP application) — **hardware-unverified**, same constraint as M9/M10 — see ADR-012, ADR-013 |
 | M14 | Independent RF validation | measured RF evidence attached to run | Planned |
 
 ## 3. Feature sequence
@@ -408,6 +408,58 @@ tests proving the live-vs-static distinction by device_id. `ruff`/`mypy`
 pass with neither `uhd` nor `SoapySDR` installed.
 `docs/testing/manual-verification-guide.md` gained an M10 section for the
 user's lab.
+
+### M11/M12/M13 — coherent-group allocation, synchronized start, continuous Doppler DSP
+
+Two branches, both based on `develop` after M10: `feature/coherent-group-allocation`
+(the domain + compiler slice, ADR-012 — `Receiver.array_group_id` wired all the way
+through to compiled `RfWindow`/`Allocation` with computed per-element Δφ/τ, atomic
+group allocation) and `feature/multi-sdr-sync-and-doppler-dsp` (the execution-layer
+slice, ADR-013 — everything ADR-012 explicitly deferred). See both ADRs for the full
+scope record; summary below.
+
+**This environment has no PPS/PTP-capable hardware and no AIR7311/X440 units
+attached, and neither real adapter exposes such a capability in code today** — so
+unlike a genuine M11 exit criterion of "any declared timing class," what's demonstrated
+here is L1 (software barrier), which needs no such hardware at all. `ReplayPlan`
+gained `required_sync_class` (compiler-aggregated, strictest requested wins, defaults
+to L0 so every existing plan/test is unaffected); `rogue.execution.orchestrator.
+start_run` issues an L1+ plan's channels concurrently against one shared future
+timestamp (`asyncio.gather`, never the original sequential loop) and measures the
+achieved skew via a new `RunEventKind.SYNC_MEASURED` event, reading each channel's
+`AdapterDeviceStatus.actual_tx_start_at`. A real correctness finding drove the
+implementation shape: `agents/common/agent.py`'s command loop handles one NATS message
+at a time, so a barrier-scheduled `start()` must return once *scheduled*, not once it
+*fires* — otherwise a second channel on the same Agent would desynchronize badly. Every
+`SDRAdapter.start()` implementation was changed to a fire-and-forget background-task
+pattern accordingly, with failures surfaced via a new `AdapterDeviceStatus.last_error`
+rather than raised (the caller has already returned by the time a barrier-scheduled
+failure can occur).
+
+`rogue.compiler.coherent_groups.compute_doppler_schedule` samples a coherent-group
+element's Doppler shift across a window's whole span (not just its start, unlike
+ADR-012's piecewise phase/delay) using the same `evaluate_mission_position` position
+evaluator; `agents/common/dsp.py` (new, pure) applies it during real streaming as a
+phase-continuous NCO (`PhaseAccumulatorNCO`, CLAUDE.md rule 9) plus a fractional-sample
+delay line, wired into `StreamingSDRAdapter._stream` only for channels that actually
+carry coherent-group fields — every non-coherent scenario (the large majority) is
+unaffected. While rebuilding that streaming path, ADR-009's original one-recording-
+per-physical-channel restriction was also relaxed to N-way mixing (one stream per
+`RfWindow` composite channel, independently gain-scaled and summed) — the domain model
+(`RfWindow.channels`, ADR-003) had supported this since M6; only the real adapters had
+never been extended to exercise it.
+
+Backend test suite grew by 60+ tests across `tests/unit/domain/`,
+`tests/unit/compiler/` (`test_coherent_groups.py`, `test_windows.py`,
+`test_compile.py`), `tests/unit/execution/` (`test_adapter.py`,
+`test_orchestrator.py`), `tests/unit/protocol/`, and a new `tests/unit/agents/
+test_dsp.py` (pure signal-processing tests against synthetic tones/ramps — an
+FFT-verified Doppler shift, a cross-checked fractional delay, NCO phase continuity
+across chunk boundaries — no hardware or mocks needed, matching CLAUDE.md §8).
+`ruff`/`mypy` pass with neither `uhd` nor `SoapySDR` installed. Manually verified
+against the full `docker compose up` stack (2 simulated Agents already configured):
+compiled a coherent-group scenario with an `l1_software_barrier` link, walked
+prepare→arm→start, and confirmed a `sync_measured` event with sub-100ms skew.
 
 ## 4. Git workflow
 

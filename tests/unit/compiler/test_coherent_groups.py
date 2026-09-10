@@ -15,13 +15,25 @@ from compiler_factories import (
 )
 
 from rogue.compiler.coherent_groups import (
+    DOPPLER_SCHEDULE_STEP_SECONDS,
+    MAX_DOPPLER_SCHEDULE_SAMPLES,
     compute_delay_offset_s,
+    compute_doppler_schedule,
     compute_phase_offset_rad,
     expand_occupied_bands,
     reference_receiver,
 )
 from rogue.domain.common import GeoPoint
 from rogue.domain.geometry import SPEED_OF_LIGHT_MPS
+from rogue.domain.mission import (
+    AltitudeReference,
+    DroneMission,
+    MissionTemplate,
+    Platform,
+    PlatformCategory,
+    Trajectory,
+    Waypoint,
+)
 from rogue.domain.receiver import ReceiverType
 from rogue.domain.recording import RecordingReference
 from rogue.domain.rf import RfLinkRole
@@ -212,3 +224,98 @@ def test_coherent_band_computes_phase_for_aoa_doa_elements() -> None:
     other_band = next(b for b in expanded if b.array_element_receiver_id == rx_b.id)
     assert reference_band.phase_offset_rad == 0.0
     assert other_band.phase_offset_rad is not None
+
+
+# --- compute_doppler_schedule (M12, ADR-013) --------------------------------
+
+_PLATFORM = Platform(name="test-quad", category=PlatformCategory.MULTIROTOR, max_speed_mps=20.0)
+
+
+def _straight_leg_mission(lon0: float, lat0: float, lon1: float, lat1: float) -> DroneMission:
+    return DroneMission(
+        name="test-mission",
+        platform=_PLATFORM,
+        trajectory=Trajectory(
+            template=MissionTemplate.WAYPOINT_TRANSIT,
+            waypoints=[
+                Waypoint(
+                    sequence_index=0,
+                    position=GeoPoint(coordinates=(lon0, lat0)),
+                    altitude_m=100.0,
+                    altitude_reference=AltitudeReference.AGL,
+                ),
+                Waypoint(
+                    sequence_index=1,
+                    position=GeoPoint(coordinates=(lon1, lat1)),
+                    altitude_m=100.0,
+                    altitude_reference=AltitudeReference.AGL,
+                ),
+            ],
+            default_speed_mps=10.0,
+        ),
+        rf_links=[],
+    )
+
+
+def test_doppler_schedule_spans_the_window_and_includes_both_ends() -> None:
+    rx = make_receiver(ReceiverType.TDOA, lon=13.4, lat=52.5)
+    # Flying due north, away from a receiver planted at the start point —
+    # steadily receding.
+    mission = _straight_leg_mission(13.4, 52.5, 13.4, 52.6)
+
+    schedule = compute_doppler_schedule(
+        rx, mission, window_start=0.0, window_end=5.0, carrier_hz=2.4e9
+    )
+
+    assert schedule[0].t_offset_seconds == 0.0
+    assert schedule[-1].t_offset_seconds == 5.0
+    assert len(schedule) >= 2
+
+
+def test_doppler_schedule_is_negative_shift_while_receding() -> None:
+    rx = make_receiver(ReceiverType.TDOA, lon=13.4, lat=52.5)
+    mission = _straight_leg_mission(13.4, 52.5, 13.4, 52.6)
+
+    schedule = compute_doppler_schedule(
+        rx, mission, window_start=0.0, window_end=5.0, carrier_hz=2.4e9
+    )
+
+    # Receding -> red-shift -> negative doppler_shift_hz (opposite sign from
+    # the frontend's "positive range-rate = receding" convention for
+    # range-rate itself).
+    assert all(sample.doppler_shift_hz < 0 for sample in schedule)
+
+
+def test_doppler_schedule_is_positive_shift_while_closing() -> None:
+    rx = make_receiver(ReceiverType.TDOA, lon=13.4, lat=52.6)
+    # Flying toward the receiver.
+    mission = _straight_leg_mission(13.4, 52.5, 13.4, 52.6)
+
+    schedule = compute_doppler_schedule(
+        rx, mission, window_start=0.0, window_end=5.0, carrier_hz=2.4e9
+    )
+
+    assert all(sample.doppler_shift_hz > 0 for sample in schedule)
+
+
+def test_doppler_schedule_sample_count_is_capped_for_long_windows() -> None:
+    rx = make_receiver(ReceiverType.TDOA, lon=13.4, lat=52.5)
+    mission = _straight_leg_mission(13.4, 52.5, 13.4, 52.6)
+
+    schedule = compute_doppler_schedule(
+        rx, mission, window_start=0.0, window_end=10_000.0, carrier_hz=2.4e9
+    )
+
+    assert len(schedule) == MAX_DOPPLER_SCHEDULE_SAMPLES
+
+
+def test_doppler_schedule_sample_count_matches_the_step_for_short_windows() -> None:
+    rx = make_receiver(ReceiverType.TDOA, lon=13.4, lat=52.5)
+    mission = _straight_leg_mission(13.4, 52.5, 13.4, 52.6)
+    window_span = 4 * DOPPLER_SCHEDULE_STEP_SECONDS
+
+    schedule = compute_doppler_schedule(
+        rx, mission, window_start=0.0, window_end=window_span, carrier_hz=2.4e9
+    )
+
+    assert len(schedule) == 5  # one per second, inclusive of both ends

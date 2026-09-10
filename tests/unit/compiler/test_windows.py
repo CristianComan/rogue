@@ -190,6 +190,56 @@ def test_non_coherent_link_unaffected_by_coherent_group_support() -> None:
     assert findings == []
     assert len(windows) == 1
     assert windows[0].channels[0].coherent_group_id is None
+    assert windows[0].channels[0].doppler_schedule is None
+
+
+# --- continuous Doppler schedule (M12, ADR-013) -----------------------------
+
+
+def test_coherent_channels_carry_a_doppler_schedule_spanning_the_whole_window() -> None:
+    recording = make_recording(sample_rate_hz=1_000_000.0, duration_s=100.0)
+    group_id = uuid4()
+    link = make_link(recording.reference(), array_group_id=group_id)
+    mission = make_mission([link])
+    rx_a = make_receiver(ReceiverType.AOA_DOA, array_group_id=group_id, element_index=0)
+    rx_b = make_receiver(ReceiverType.AOA_DOA, array_group_id=group_id, element_index=1)
+    version = make_scenario_version([mission], [recording.reference()], receivers=[rx_a, rx_b])
+    recordings = {recording_key(recording.reference()): recording}
+    profile = make_capability_profile()
+
+    windows, findings = compute_rf_windows(
+        version, recordings, duration_s=10.0, capability_profile=profile
+    )
+
+    assert findings == []
+    for window in windows:
+        schedule = window.channels[0].doppler_schedule
+        assert schedule is not None
+        assert schedule[0].t_offset_seconds == 0.0
+        assert schedule[-1].t_offset_seconds == window.end_seconds - window.start_seconds
+
+
+def test_tdoa_elements_get_a_doppler_schedule_despite_having_no_phase() -> None:
+    """Doppler needs no element_local_offset_m — unlike phase, it's
+    computed for TDOA elements too."""
+    recording = make_recording(sample_rate_hz=1_000_000.0, duration_s=100.0)
+    group_id = uuid4()
+    link = make_link(recording.reference(), array_group_id=group_id)
+    mission = make_mission([link])
+    rx_a = make_receiver(ReceiverType.TDOA, array_group_id=group_id, element_index=0)
+    rx_b = make_receiver(ReceiverType.TDOA, array_group_id=group_id, element_index=1)
+    version = make_scenario_version([mission], [recording.reference()], receivers=[rx_a, rx_b])
+    recordings = {recording_key(recording.reference()): recording}
+    profile = make_capability_profile()
+
+    windows, findings = compute_rf_windows(
+        version, recordings, duration_s=10.0, capability_profile=profile
+    )
+
+    assert findings == []
+    for window in windows:
+        assert window.channels[0].phase_offset_rad is None
+        assert window.channels[0].doppler_schedule is not None
 
 
 def test_idle_link_contributes_no_window() -> None:

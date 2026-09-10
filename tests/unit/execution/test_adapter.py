@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -90,6 +92,63 @@ async def test_arm_then_start_marks_the_channel_transmitting() -> None:
     await adapter.start(DEVICE, CHANNEL)
     status_after_start = await adapter.status(DEVICE, CHANNEL)
     assert status_after_start.transmitting is True
+
+
+async def test_start_without_barrier_at_is_unchanged_from_before_m11() -> None:
+    """Regression: the default (no synchronization requested) path must
+    behave exactly as it did before `barrier_at` existed.
+    """
+    adapter = MockSDRAdapter(capabilities=[])
+    await adapter.arm(DEVICE, CHANNEL, start_at_seconds=0.0)
+
+    await adapter.start(DEVICE, CHANNEL)
+
+    status = await adapter.status(DEVICE, CHANNEL)
+    assert status.transmitting is True
+    assert status.actual_tx_start_at is not None
+    assert status.last_error is None
+
+
+async def test_barrier_start_does_not_transmit_before_the_target_time() -> None:
+    adapter = MockSDRAdapter(capabilities=[])
+    barrier_at = datetime.now(UTC) + timedelta(seconds=0.2)
+
+    await adapter.start(DEVICE, CHANNEL, barrier_at=barrier_at)
+
+    # start() must return once scheduled, not once the barrier fires.
+    status = await adapter.status(DEVICE, CHANNEL)
+    assert status.transmitting is False
+    assert status.actual_tx_start_at is None
+
+
+async def test_barrier_start_transmits_once_the_target_time_arrives() -> None:
+    adapter = MockSDRAdapter(capabilities=[])
+    barrier_at = datetime.now(UTC) + timedelta(seconds=0.05)
+
+    await adapter.start(DEVICE, CHANNEL, barrier_at=barrier_at)
+    await asyncio.sleep(0.15)
+
+    status = await adapter.status(DEVICE, CHANNEL)
+    assert status.transmitting is True
+    assert status.actual_tx_start_at is not None
+    assert status.actual_tx_start_at >= barrier_at
+
+
+async def test_barrier_start_failure_is_reported_via_status_not_raised() -> None:
+    """A barrier-scheduled start must return immediately once scheduled
+    (see StreamingSDRAdapter.start's docstring for why) — a failure that
+    happens once the barrier fires can't be raised back to the original
+    caller, so it surfaces via status().last_error instead.
+    """
+    adapter = MockSDRAdapter(capabilities=[], fail_on={(DEVICE, CHANNEL, "start")})
+    barrier_at = datetime.now(UTC) + timedelta(seconds=0.05)
+
+    await adapter.start(DEVICE, CHANNEL, barrier_at=barrier_at)  # does not raise
+    await asyncio.sleep(0.15)
+
+    status = await adapter.status(DEVICE, CHANNEL)
+    assert status.transmitting is False
+    assert status.last_error is not None
 
 
 async def test_stop_clears_armed_and_transmitting() -> None:

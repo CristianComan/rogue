@@ -12,6 +12,7 @@ from uuid import uuid4
 import pytest
 from execution_factories import make_plan_and_recordings, make_plan_and_recordings_two_channels
 
+from rogue.domain.rf import TimingSyncClass
 from rogue.domain.run import RunEventKind, RunStatus, ScenarioRun
 from rogue.execution.adapter import MockSDRAdapter
 from rogue.execution.orchestrator import (
@@ -164,6 +165,84 @@ async def test_start_run_requires_armed_status() -> None:
 
     with pytest.raises(InvalidRunTransitionError):
         await start_run(run, plan, adapter)
+
+
+# --- synchronized barrier start (M11, ADR-013) ------------------------------
+
+
+async def test_start_run_defaults_to_l0_and_records_no_sync_event() -> None:
+    plan, recordings = make_plan_and_recordings()
+    assert plan.required_sync_class == TimingSyncClass.L0_SIMULATED
+    adapter = MockSDRAdapter(capabilities=plan.capability_profile.channels)
+    run = make_run(replay_plan_id=plan.id)
+    prepared = await prepare_run(run, plan, recordings, adapter)
+    armed = await arm_run(prepared, plan, adapter)
+
+    started = await start_run(armed, plan, adapter)
+
+    assert started.status == RunStatus.RUNNING
+    assert RunEventKind.SYNC_MEASURED not in {e.kind for e in started.events}
+
+
+class _BarrierSpyAdapter(MockSDRAdapter):
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self.barrier_ats: dict[tuple[str, int], object] = {}
+
+    async def start(self, device_id, channel_index, barrier_at=None) -> None:  # type: ignore[no-untyped-def]
+        self.barrier_ats[(device_id, channel_index)] = barrier_at
+        await super().start(device_id, channel_index, barrier_at=barrier_at)
+
+
+async def test_start_run_with_barrier_synchronizes_every_channel_to_the_same_instant() -> None:
+    plan, recordings = make_plan_and_recordings_two_channels()
+    plan = plan.model_copy(update={"required_sync_class": TimingSyncClass.L1_SOFTWARE_BARRIER})
+    adapter = _BarrierSpyAdapter(capabilities=plan.capability_profile.channels)
+    run = make_run(replay_plan_id=plan.id)
+    prepared = await prepare_run(run, plan, recordings, adapter)
+    armed = await arm_run(prepared, plan, adapter)
+
+    started = await start_run(armed, plan, adapter)
+
+    assert started.status == RunStatus.RUNNING
+    assert len(adapter.barrier_ats) == 2
+    distinct_barrier_ats = set(adapter.barrier_ats.values())
+    assert len(distinct_barrier_ats) == 1
+    assert None not in distinct_barrier_ats
+
+
+async def test_start_run_with_barrier_records_a_sync_measured_event() -> None:
+    plan, recordings = make_plan_and_recordings()
+    plan = plan.model_copy(update={"required_sync_class": TimingSyncClass.L2_SCHEDULED_LOCAL})
+    adapter = MockSDRAdapter(capabilities=plan.capability_profile.channels)
+    run = make_run(replay_plan_id=plan.id)
+    prepared = await prepare_run(run, plan, recordings, adapter)
+    armed = await arm_run(prepared, plan, adapter)
+
+    started = await start_run(armed, plan, adapter)
+
+    assert started.status == RunStatus.RUNNING
+    sync_events = [e for e in started.events if e.kind == RunEventKind.SYNC_MEASURED]
+    assert len(sync_events) == 1
+    assert "skew" in sync_events[0].message
+    assert TimingSyncClass.L2_SCHEDULED_LOCAL.value in sync_events[0].message
+
+
+async def test_start_run_with_barrier_fails_the_run_if_a_channel_fails_during_the_barrier() -> None:
+    plan, recordings = make_plan_and_recordings()
+    plan = plan.model_copy(update={"required_sync_class": TimingSyncClass.L1_SOFTWARE_BARRIER})
+    allocation = plan.allocations[0]
+    adapter = MockSDRAdapter(
+        capabilities=plan.capability_profile.channels,
+        fail_on={(allocation.device_id, allocation.channel_index, "start")},
+    )
+    run = make_run(replay_plan_id=plan.id)
+    prepared = await prepare_run(run, plan, recordings, adapter)
+    armed = await arm_run(prepared, plan, adapter)
+
+    started = await start_run(armed, plan, adapter)
+
+    assert started.status == RunStatus.FAILED
 
 
 async def test_stop_run_from_running() -> None:

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import itertools
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from uuid import UUID, uuid4
 
 import nats.errors
@@ -142,8 +143,10 @@ class RemoteAgentAdapter:
             AgentCommandKind.ARM, device_id, channel_index, start_at_seconds=start_at_seconds
         )
 
-    async def start(self, device_id: str, channel_index: int) -> None:
-        await self._send(AgentCommandKind.START, device_id, channel_index)
+    async def start(
+        self, device_id: str, channel_index: int, barrier_at: datetime | None = None
+    ) -> None:
+        await self._send(AgentCommandKind.START, device_id, channel_index, barrier_at=barrier_at)
 
     async def stop(self, device_id: str, channel_index: int) -> None:
         await self._send(AgentCommandKind.STOP, device_id, channel_index)

@@ -100,7 +100,7 @@ hands the port back to the container when you're done.
 | M8 | Distributed SDR Agent | Done |
 | M9 | First real adapter (Ettus X440) | Code complete, **hardware-unverified** (ADR-009) |
 | M10 | X440 + AIR7311 capability-based scheduling | Live-scheduling: done. **AIR7311 hardware-verified 2026-09-08** (ADR-010, ADR-011). X440 hardware path still unverified. |
-| M11–M13 (partial) | Multi-SDR sync / Doppler-delay-phase / TDOA-AOA stimulation | **Domain + compiler slice only**: coherent-group RF window generation and atomic channel allocation (ADR-012). Execution-layer (grouped lease/arm/start) and continuous per-sample DSP application are not built. |
+| M11–M13 | Multi-SDR sync / Doppler-delay-phase / TDOA-AOA stimulation | Domain + compiler slice (ADR-012: coherent-group RF window generation, atomic channel allocation) **plus** execution-layer slice (ADR-013: synchronized barrier start with measured skew, continuous Doppler-driven phase DSP during streaming, N-recording mixing per channel). L1 (software barrier) is the achievable sync ceiling — no PPS/PTP in either real adapter; DSP verified against a fake device seam, **hardware-unverified** like M9/M10. |
 
 Plus a UI overhaul (Replay page, SDR Console page, restructured Development
 page) and a Replay/SDR Console frontend layer sitting on top of the above —
@@ -670,29 +670,159 @@ see that ADR for the SoapyRemote workaround device-args instead.) Same
 cabled/attenuated safety setup as M9; same `ROGUE_ENABLE_REAL_TX=0` first,
 confirm presence/`discover()`/`configure`, then `1`.
 
-## M11–M13 (partial) — coherent-group RF window generation
+## M11–M13 — coherent-group allocation, synchronized start, continuous Doppler DSP
 
-Domain + compiler slice only (ADR-012) — no execution/orchestrator/NATS/
-agent changes, so nothing here needs real or simulated hardware to verify:
+Domain + compiler slice (ADR-012) plus the execution-layer slice (ADR-013:
+synchronized barrier start, continuous Doppler-driven phase DSP, N-recording
+mixing). **No AIR7311/X440 hardware or `ROGUE_ENABLE_REAL_TX` needed for any
+of this** — neither real adapter exposes any PPS/PTP capability, so what's
+demonstrated is L1 (software barrier), fully exercisable against the
+simulated Agents already in the `docker compose` stack.
 
 ```bash
 pytest tests/unit/domain/test_geometry.py tests/unit/domain/test_mission_evaluator.py \
        tests/unit/compiler/test_coherent_groups.py tests/unit/compiler/test_windows.py \
-       tests/unit/compiler/test_allocation.py tests/unit/compiler/test_compile.py -v
+       tests/unit/compiler/test_allocation.py tests/unit/compiler/test_compile.py \
+       tests/unit/execution/ tests/unit/protocol/ tests/unit/agents/test_dsp.py \
+       tests/unit/agents/test_x440_adapter.py tests/unit/agents/test_air7311_adapter.py -v
 ```
 
-To see it end to end: publish a scenario with one `DroneRfLink` carrying an
-`array_group_id`, plus 2+ `Receiver`s (type `tdoa` or `aoa_doa`) sharing
-that same `array_group_id`, then compile it (M6 above) — expect **N
-separate `rf_windows`** (one per receiver element, never merged even
-though they're frequency-identical) each with exactly one
-`CompositeChannel` carrying a non-null `coherent_group_id`,
-`array_element_receiver_id`, and a computed `delay_offset_s` (plus
-`phase_offset_rad` for `aoa_doa` elements), and **N allocations landing on N
-distinct physical channels** — or, if not enough channels are free, **zero**
-allocations for the whole group plus one
-`insufficient_physical_channels_for_coherent_group` finding (atomic, not
-partial).
+**End to end against the live stack:** publish a scenario with one
+`DroneRfLink` carrying an `array_group_id` and a `resource_preference:
+{"required_sync_class": "l1_software_barrier"}`, plus 2+ `Receiver`s (type
+`tdoa` or `aoa_doa`) sharing that same `array_group_id`, then compile it (M6
+above). Expect:
+
+- `plan.required_sync_class == "l1_software_barrier"` (aggregated from the
+  link's `resource_preference` — defaults to `l0_simulated` when no link
+  declares one, so every plan compiled before this existed is unaffected);
+- **N separate `rf_windows`** (one per receiver element, never merged even
+  though they're frequency-identical), each with exactly one
+  `CompositeChannel` carrying a non-null `coherent_group_id`,
+  `array_element_receiver_id`, a computed `delay_offset_s` (plus
+  `phase_offset_rad` for `aoa_doa` elements), and now also a
+  `doppler_schedule` (several samples spanning the window, not just one) —
+  or, if not enough channels are free, **zero** allocations for the whole
+  group plus one `insufficient_physical_channels_for_coherent_group` finding
+  (atomic, not partial);
+- walking `create run → arm → start` produces a `sync_measured` event
+  reporting the requested vs. achieved sync class and the measured skew
+  across every channel in the barrier group (milliseconds, typically
+  near-zero when the allocation lands on channels owned by the same
+  simulated Agent — a real cross-Agent scenario would show real network-
+  induced skew instead).
+
+**A full script building exactly this scenario** (synthetic SigMF upload, 2
+AOA_DOA receivers sharing one `array_group_id`, a coherent link declaring
+`l1_software_barrier`, compile, and the full run lifecycle) — needs
+`pip install httpx boto3` in whatever environment runs it, and a rebuilt
+`api`/`simulated-agent-*` stack (`docker compose build api simulated-agent-1
+simulated-agent-2 && docker compose up -d --force-recreate api
+simulated-agent-1 simulated-agent-2`) so the containers actually have this
+code:
+
+```python
+# save as /tmp/verify_m11_m12.py
+import hashlib, json, struct, uuid
+import boto3, httpx
+
+BASE = "http://localhost:8000"
+
+samples = b"".join(struct.pack("<ff", 0.001 * i, -0.001 * i) for i in range(2000))
+meta = {
+    "global": {"core:datatype": "cf32_le", "core:sample_rate": 1_000_000,
+               "core:sha512": hashlib.sha512(samples).hexdigest()},
+    "captures": [{"core:sample_start": 0, "core:frequency": 2_400_000_000}],
+    "annotations": [],
+}
+s3 = boto3.client("s3", endpoint_url="http://localhost:9000",
+                   aws_access_key_id="rogue", aws_secret_access_key="rogue_dev_password")
+key_prefix = f"m11-m12-check-{uuid.uuid4().hex[:8]}"
+s3.put_object(Bucket="rogue", Key=f"{key_prefix}/test.sigmf-meta", Body=json.dumps(meta).encode())
+s3.put_object(Bucket="rogue", Key=f"{key_prefix}/test.sigmf-data", Body=samples)
+
+client = httpx.Client(base_url=BASE, timeout=10.0)
+scenario = client.post("/scenarios", json={
+    "name": "m11-m12 coherent group check", "owner": "manual-check",
+    "area_of_operation": {"type": "Polygon", "coordinates": [[[13.0, 52.0], [13.6, 52.0], [13.6, 52.6], [13.0, 52.6], [13.0, 52.0]]]},
+}).json()
+scenario_id = scenario["id"]
+draft_id = client.post(f"/scenarios/{scenario_id}/drafts", json={"author": "manual-check"}).json()["id"]
+recording_id = client.post("/recordings", json={
+    "metadata_object_key": f"{key_prefix}/test.sigmf-meta", "data_object_key": f"{key_prefix}/test.sigmf-data",
+    "provenance": "manual check",
+}).json()["recording"]["id"]
+
+group_id = str(uuid.uuid4())
+rx = lambda name, idx, offset: {  # noqa: E731
+    "name": name, "receiver_type": "aoa_doa", "position": {"type": "Point", "coordinates": [13.40, 52.50]},
+    "array_group_id": group_id, "element_index": idx, "element_local_offset_m": offset,
+}
+
+draft_content = {
+    "author": "manual-check", "expected_revision": 0, "zones": [], "timeline_events": [],
+    "receivers": [rx("rx-a", 0, [0.0, 0.0, 0.0]), rx("rx-b", 1, [0.0, 5.0, 0.0])],
+    "missions": [{
+        "name": "recon-1", "platform": {"name": "Quad", "category": "multirotor", "max_speed_mps": 18.0},
+        "trajectory": {"template": "waypoint_transit", "default_speed_mps": 12.0, "waypoints": [
+            {"sequence_index": 0, "position": {"type": "Point", "coordinates": [13.40, 52.20]}, "altitude_m": 100.0},
+            {"sequence_index": 1, "position": {"type": "Point", "coordinates": [13.45, 52.25]}, "altitude_m": 100.0},
+        ]},
+        "rf_links": [{
+            "role": "c2", "band": {"freq_min_hz": 2.4e9, "freq_max_hz": 2.4835e9},
+            "frequency_behaviour": {"mode": "scripted", "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.410e9}]},
+            "emissions": [{"recording": {"recording_id": recording_id, "version": 1}}],
+            "array_group_id": group_id,
+            "resource_preference": {"required_sync_class": "l1_software_barrier"},
+        }],
+    }],
+}
+client.put(f"/scenarios/{scenario_id}/drafts/{draft_id}", json=draft_content).raise_for_status()
+client.post(f"/scenarios/{scenario_id}/drafts/{draft_id}/validate").raise_for_status()
+version_number = client.post(f"/scenarios/{scenario_id}/drafts/{draft_id}/publish").json()["version_number"]
+
+plan = client.post(f"/scenarios/{scenario_id}/versions/{version_number}/compile",
+                    json={"duration_s": 10.0}, headers={"Idempotency-Key": str(uuid.uuid4())}).json()
+plan_id = plan["id"]
+print("required_sync_class:", plan["required_sync_class"])
+print("rf_windows:", len(plan["rf_windows"]), "allocations:", len(plan["allocations"]))
+for w in plan["rf_windows"]:
+    for ch in w["channels"]:
+        print("  coherent_group_id=", ch.get("coherent_group_id"), "phase=", ch.get("phase_offset_rad"),
+              "delay=", ch.get("delay_offset_s"),
+              "doppler_samples=", len(ch["doppler_schedule"]) if ch.get("doppler_schedule") else None)
+
+run = client.post(f"/scenarios/{scenario_id}/replay-plans/{plan_id}/runs",
+                   json={"operator": "manual-check"}, headers={"Idempotency-Key": str(uuid.uuid4())}).json()
+run_id = run["id"]
+client.post(f"/scenarios/{scenario_id}/replay-plans/{plan_id}/runs/{run_id}/arm",
+            headers={"Idempotency-Key": str(uuid.uuid4())}).raise_for_status()
+start = client.post(f"/scenarios/{scenario_id}/replay-plans/{plan_id}/runs/{run_id}/start",
+                     headers={"Idempotency-Key": str(uuid.uuid4())}).json()
+print("started:", start["status"])
+for e in start["events"]:
+    print(" ", e["kind"], "-", e["message"])
+client.post(f"/scenarios/{scenario_id}/replay-plans/{plan_id}/runs/{run_id}/stop",
+            headers={"Idempotency-Key": str(uuid.uuid4())}).raise_for_status()
+```
+```bash
+python /tmp/verify_m11_m12.py
+```
+
+Confirmed working 2026-09-10: `required_sync_class: l1_software_barrier`, 2
+`rf_windows`/2 `allocations` (landing on the real, live-discovered
+`x440-1:0`/`x440-1:1` — `docker compose logs simulated-agent-1` shows a real
+cache-download line, proving this ran the actual distributed NATS dispatch
+path, not an in-process shortcut), both channels sharing one
+`coherent_group_id` with one phase at `0.0` (the reference element) and the
+other non-zero, a 2-sample `doppler_schedule` on each, and a final event
+list ending `started -> scheduled barrier start for x440-1:0/1 at the same
+timestamp -> sync_measured: barrier start requested l1_software_barrier,
+executed via l1_software_barrier: measured skew 0.0 ms across 2 channel(s)`.
+Zero skew here is expected, not suspicious — both channels landed on
+devices owned by the same simulated Agent process, so there's no real
+network hop between them; a cross-Agent allocation would show non-zero,
+network-induced skew instead.
 
 ## Real drone RF corpus loader (`scripts/ingest_drone_corpus.py`)
 

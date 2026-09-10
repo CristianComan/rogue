@@ -83,6 +83,10 @@ class AgentCommand(RogueModel):
     start_at_seconds: float | None = None
     lease_ttl_seconds: float | None = None
     lease: DeviceLease | None = None
+    # M11, ADR-013: a synchronized-barrier START's target wall-clock
+    # instant. None means "start immediately" — every command before this
+    # field existed is equivalent to that, so it's fully backward compatible.
+    barrier_at: datetime | None = None
 
 
 class AgentAck(RogueModel):

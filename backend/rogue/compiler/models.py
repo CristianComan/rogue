@@ -26,7 +26,7 @@ from uuid import UUID
 
 from rogue.domain.common import FrozenRogueModel
 from rogue.domain.recording import RecordingReference
-from rogue.domain.rf import FrequencyTransitionType, RfLinkRole
+from rogue.domain.rf import FrequencyTransitionType, RfLinkRole, TimingSyncClass
 from rogue.domain.validation import ValidationSeverity
 
 
@@ -44,6 +44,25 @@ class RealizedFrequencyEvent(FrozenRogueModel):
     transition_type: FrequencyTransitionType
     reason: str
     seed_context: int | None = None
+
+
+class DopplerSample(FrozenRogueModel):
+    """One point of a channel's Doppler-shift schedule (M12, ADR-013).
+
+    ``t_offset_seconds`` is relative to the owning ``RfWindow``'s own
+    ``start_seconds`` (not the scenario/mission clock) — the Agent applies
+    this purely against its own local streaming-elapsed time, never needing
+    further control-plane contact mid-burst (``sdr-architecture.md`` §6:
+    "the control network is not the sample transport path").
+    ``doppler_shift_hz`` follows the physics sign convention (closing ->
+    positive/blue-shift, receding -> negative/red-shift) — the *opposite*
+    sign from the frontend's ``domain/doppler.ts`` range-rate convention
+    (positive range-rate = receding), documented explicitly to avoid
+    confusion between the two.
+    """
+
+    t_offset_seconds: float
+    doppler_shift_hz: float
 
 
 class CompositeChannel(FrozenRogueModel):
@@ -70,13 +89,21 @@ class CompositeChannel(FrozenRogueModel):
     # ordinary (non-coherent) channel. phase_offset_rad is set only for
     # AOA_DOA members (TDOA elements have no element_local_offset_m to
     # project a phase from — delay_offset_s alone is meaningful for them).
-    # Computed once per RfWindow span at the span's start_seconds — a
-    # piecewise-constant approximation, not a continuous per-sample
-    # schedule (see rogue.compiler.coherent_groups's module docstring).
+    # phase_offset_rad/delay_offset_s are computed once per RfWindow span at
+    # the span's start_seconds — a piecewise-constant approximation (see
+    # rogue.compiler.coherent_groups's module docstring). doppler_schedule
+    # (M12, ADR-013) is the one field of the four that *is* continuous: it's
+    # computed once the window's true final [start_seconds, end_seconds)
+    # span is known (rogue.compiler.windows may coalesce several packing
+    # instants into one window, extending end_seconds without recomputing
+    # the other three — so only a post-pass over the final window list can
+    # correctly span the whole thing), and set for both TDOA and AOA_DOA
+    # elements (Doppler needs no element_local_offset_m, unlike phase).
     coherent_group_id: UUID | None = None
     array_element_receiver_id: UUID | None = None
     phase_offset_rad: float | None = None
     delay_offset_s: float | None = None
+    doppler_schedule: list[DopplerSample] | None = None
 
 
 class RfWindow(FrozenRogueModel):
@@ -161,6 +188,14 @@ class ReplayPlan(FrozenRogueModel):
     simulated ``capability_profile``, not runtime-discovered hardware (rule
     10) — see ADR-001 and ADR-006. Compiling the same
     (scenario_version, duration_s, capability_profile) is deterministic.
+
+    ``required_sync_class`` (M11, ADR-013) is the strictest
+    ``ResourcePreference.required_sync_class`` declared by any
+    ``DroneRfLink`` in the version, defaulting to ``L0_SIMULATED`` (no
+    coordination requested) when none declare one — every plan compiled
+    before this field existed is equivalent to that default, so nothing
+    about existing behavior changes unless a scenario actually asks for
+    synchronization.
     """
 
     id: UUID
@@ -176,6 +211,7 @@ class ReplayPlan(FrozenRogueModel):
     allocations: list[Allocation]
     safety_policy_outcome: SafetyPolicyOutcome
     findings: list[CompilerFinding]
+    required_sync_class: TimingSyncClass = TimingSyncClass.L0_SIMULATED
 
 
 # X440's native RF path excludes 5.15-5.925 GHz (CLAUDE.md rule 4: that band
