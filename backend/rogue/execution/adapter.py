@@ -61,7 +61,23 @@ class SimulatedDeviceFailureError(AdapterOperationError):
 
 @dataclass(frozen=True)
 class AdapterDeviceStatus:
-    """A channel's current state, as the adapter itself understands it."""
+    """A channel's current state, as the adapter itself understands it.
+
+    ``actual_tx_start_at`` (M11) is only meaningful once ``transmitting`` is
+    true — it is the wall-clock instant this channel actually began
+    transmitting, as opposed to when a ``start()`` call was merely accepted.
+    For a barrier-synchronized start (see ``start()`` below) these two can
+    differ by design; comparing ``actual_tx_start_at`` across every channel
+    in one barrier group is how synchronization is *measured*, not just
+    declared (``sdr-architecture.md`` §5, M11's exit criterion).
+
+    ``last_error`` surfaces a failure that happened in the background after
+    a barrier-scheduled ``start()`` already returned (it must return
+    immediately — see ``start()``'s docstring — so a failure can't simply be
+    raised back to the original caller). ``rogue.execution.orchestrator``
+    polls this after a barrier group's target time to distinguish a real
+    failure from a channel that merely hasn't reported back yet.
+    """
 
     device_id: str
     channel_index: int
@@ -69,6 +85,8 @@ class AdapterDeviceStatus:
     configured: bool
     armed: bool
     transmitting: bool
+    actual_tx_start_at: datetime | None = None
+    last_error: str | None = None
 
 
 class SDRAdapter(Protocol):
@@ -85,7 +103,9 @@ class SDRAdapter(Protocol):
     ) -> None: ...
     async def configure(self, device_id: str, channel_index: int, window: RfWindow) -> None: ...
     async def arm(self, device_id: str, channel_index: int, start_at_seconds: float) -> None: ...
-    async def start(self, device_id: str, channel_index: int) -> None: ...
+    async def start(
+        self, device_id: str, channel_index: int, barrier_at: datetime | None = None
+    ) -> None: ...
     async def stop(self, device_id: str, channel_index: int) -> None: ...
     async def emergency_stop(self, device_id: str, channel_index: int) -> None: ...
     async def status(self, device_id: str, channel_index: int) -> AdapterDeviceStatus: ...
@@ -100,6 +120,9 @@ class _ChannelState:
     configured: bool = False
     armed: bool = False
     transmitting: bool = False
+    actual_tx_start_at: datetime | None = None
+    last_error: str | None = None
+    barrier_task: asyncio.Task[None] | None = None
 
 
 class MockSDRAdapter:
@@ -177,15 +200,51 @@ class MockSDRAdapter:
         await self._simulate(device_id, channel_index, "arm")
         self._state(device_id, channel_index).armed = True
 
-    async def start(self, device_id: str, channel_index: int) -> None:
-        await self._simulate(device_id, channel_index, "start")
-        self._state(device_id, channel_index).transmitting = True
+    async def start(
+        self, device_id: str, channel_index: int, barrier_at: datetime | None = None
+    ) -> None:
+        if barrier_at is None:
+            await self._simulate(device_id, channel_index, "start")
+            state = self._state(device_id, channel_index)
+            state.transmitting = True
+            state.actual_tx_start_at = datetime.now(UTC)
+            return
+        # Barrier-synchronized start (M11): the actual keying is scheduled
+        # as a background task and this call returns as soon as it's
+        # scheduled, not once it fires. This is not an optimization — it's
+        # required for correctness. A real Agent's command loop
+        # (agents/common/agent.py) processes one NATS message at a time; if
+        # this awaited the sleep itself, a second channel owned by the same
+        # Agent would only begin *its own* wait after the first one's
+        # already elapsed, breaking the barrier for every multi-channel
+        # Agent (see ADR-013).
+        state = self._state(device_id, channel_index)
+        state.last_error = None
+        state.barrier_task = asyncio.create_task(
+            self._start_at_barrier(device_id, channel_index, barrier_at)
+        )
+
+    async def _start_at_barrier(
+        self, device_id: str, channel_index: int, barrier_at: datetime
+    ) -> None:
+        delay = (barrier_at - datetime.now(UTC)).total_seconds()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        state = self._state(device_id, channel_index)
+        try:
+            await self._simulate(device_id, channel_index, "start")
+        except SimulatedDeviceFailureError as exc:
+            state.last_error = str(exc)
+            return
+        state.transmitting = True
+        state.actual_tx_start_at = datetime.now(UTC)
 
     async def stop(self, device_id: str, channel_index: int) -> None:
         await self._simulate(device_id, channel_index, "stop")
         state = self._state(device_id, channel_index)
         state.transmitting = False
         state.armed = False
+        state.actual_tx_start_at = None
 
     async def emergency_stop(self, device_id: str, channel_index: int) -> None:
         # Deliberately does not consult _fail_on/raise — emergency stop must
@@ -193,8 +252,12 @@ class MockSDRAdapter:
         # section 10: emergency stop paths receive dedicated tests, and a
         # stop path that itself can fail defeats the point).
         state = self._state(device_id, channel_index)
+        if state.barrier_task is not None:
+            state.barrier_task.cancel()
+            state.barrier_task = None
         state.transmitting = False
         state.armed = False
+        state.actual_tx_start_at = None
 
     async def status(self, device_id: str, channel_index: int) -> AdapterDeviceStatus:
         state = self._state(device_id, channel_index)
@@ -205,4 +268,6 @@ class MockSDRAdapter:
             configured=state.configured,
             armed=state.armed,
             transmitting=state.transmitting,
+            actual_tx_start_at=state.actual_tx_start_at,
+            last_error=state.last_error,
         )

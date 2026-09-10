@@ -11,12 +11,19 @@ so a coherent group's N elements are packed into N separate ``RfWindow``s
 (never merged — see ``windows.py``'s ``_pack_bands`` guard) ready for
 ``rogue.compiler.allocation``'s atomic group-allocation pass.
 
-Both phase and delay are computed once per call (i.e. once per ``RfWindow``
-span, at the span's ``start_seconds``) from the transmitter's position at
-that instant (``rogue.domain.mission_evaluator.evaluate_mission_position``)
-— a piecewise-constant approximation good for the granularity ``RfWindow``
-spans already discretize time at, not a continuous per-sample NCO/delay
-schedule (that's M12/execution-layer streaming DSP, out of scope here).
+Phase and delay are computed once per call (i.e. once per ``RfWindow`` span,
+at the span's ``start_seconds``) from the transmitter's position at that
+instant (``rogue.domain.mission_evaluator.evaluate_mission_position``) — a
+piecewise-constant approximation good for the granularity ``RfWindow``
+spans already discretize time at (delay changes negligibly within one
+window at realistic drone speeds). Doppler shift (M12, ADR-013) is
+different: ``compute_doppler_schedule`` below produces several samples
+across a window's span rather than one, because the whole point is
+applying it as a *continuous* per-sample NCO during streaming
+(``agents/common/dsp.py``) — it is computed separately, once each
+``RfWindow``'s final span is known, by ``rogue.compiler.windows`` (not
+inline here, since window-coalescing can extend a span after this module's
+per-instant expansion already ran).
 
 Reference-integrity (an ``array_group_id`` must resolve to >=2 TDOA/AOA_DOA
 receivers) is validated separately by
@@ -31,7 +38,7 @@ from __future__ import annotations
 import math
 from uuid import UUID
 
-from rogue.compiler.models import CompilerFinding
+from rogue.compiler.models import CompilerFinding, DopplerSample
 from rogue.domain.common import GeoPoint
 from rogue.domain.geometry import (
     SPEED_OF_LIGHT_MPS,
@@ -45,6 +52,16 @@ from rogue.domain.rf import DroneRfLink
 from rogue.domain.scenario import ScenarioVersion
 from rogue.domain.validation import ValidationSeverity
 from rogue.spectrum.models import OccupiedBand
+
+# Doppler schedule sampling (M12, ADR-013): a fixed cadence, capped for very
+# long windows so a plan's size stays bounded regardless of scenario
+# duration — a documented granularity choice, not a claim that Doppler
+# actually changes in discrete steps.
+DOPPLER_SCHEDULE_STEP_SECONDS = 1.0
+MAX_DOPPLER_SCHEDULE_SAMPLES = 61
+# Finite-difference step for range-rate estimation — same two-sample
+# technique as frontend/src/domain/doppler.ts:rangeAndRangeRate.
+_RANGE_RATE_DT_SECONDS = 0.05
 
 
 def reference_receiver(members: list[Receiver]) -> Receiver:
@@ -96,6 +113,54 @@ def compute_phase_offset_rad(
 
     wavelength_m = SPEED_OF_LIGHT_MPS / carrier_hz
     return 2 * math.pi / wavelength_m * projected_offset_m
+
+
+def _range_rate_mps(receiver: Receiver, mission: DroneMission, at_seconds: float) -> float:
+    """Instantaneous rate of change of the transmitter-to-receiver range, in
+    m/s (positive = receding), via two-sample finite difference — mirrors
+    frontend/src/domain/doppler.ts:rangeAndRangeRate exactly, so backend and
+    frontend agree on the same figure for the same inputs.
+    """
+    p_before = evaluate_mission_position(mission, at_seconds)
+    p_after = evaluate_mission_position(mission, at_seconds + _RANGE_RATE_DT_SECONDS)
+    range_before = haversine_distance_m(p_before, receiver.position)
+    range_after = haversine_distance_m(p_after, receiver.position)
+    return (range_after - range_before) / _RANGE_RATE_DT_SECONDS
+
+
+def compute_doppler_schedule(
+    receiver: Receiver,
+    mission: DroneMission,
+    window_start: float,
+    window_end: float,
+    carrier_hz: float,
+) -> list[DopplerSample]:
+    """A Doppler-shift schedule for ``receiver`` observing ``mission``'s
+    transmitter across ``[window_start, window_end)`` (M12, ADR-013).
+
+    Unlike ``compute_delay_offset_s``/``compute_phase_offset_rad``, this
+    needs no "reference element" — Doppler shift is an absolute quantity
+    per (transmitter, receiver) pair, computed the same way for TDOA and
+    AOA_DOA elements alike (it doesn't depend on ``element_local_offset_m``).
+
+    ``doppler_shift_hz = -range_rate_mps / c * carrier_hz``: receding
+    (positive range-rate) yields a *negative* shift (red-shift, lower
+    frequency); closing yields positive (blue-shift) — the standard physics
+    convention, opposite in sign from the frontend's "positive range-rate =
+    receding" convention for range-rate itself (only the shift's sign
+    flips; range-rate's own sign convention is unchanged and shared).
+    """
+    span = max(0.0, window_end - window_start)
+    sample_count = max(
+        2, min(MAX_DOPPLER_SCHEDULE_SAMPLES, math.ceil(span / DOPPLER_SCHEDULE_STEP_SECONDS) + 1)
+    )
+    samples = []
+    for i in range(sample_count):
+        t_offset = span * i / (sample_count - 1) if sample_count > 1 else 0.0
+        range_rate = _range_rate_mps(receiver, mission, window_start + t_offset)
+        doppler_shift_hz = -range_rate / SPEED_OF_LIGHT_MPS * carrier_hz
+        samples.append(DopplerSample(t_offset_seconds=t_offset, doppler_shift_hz=doppler_shift_hz))
+    return samples
 
 
 def expand_occupied_bands(

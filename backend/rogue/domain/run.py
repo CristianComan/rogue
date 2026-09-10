@@ -64,6 +64,7 @@ class RunEventKind(StrEnum):
     STOPPED = "stopped"
     EMERGENCY_STOPPED = "emergency_stopped"
     LEASE_RENEWED = "lease_renewed"
+    SYNC_MEASURED = "sync_measured"
     ERROR = "error"
 
 

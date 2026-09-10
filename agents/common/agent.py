@@ -207,7 +207,7 @@ class AgentRuntime:
             self._touch(key)
             return {}
         if kind == AgentCommandKind.START:
-            await adapter.start(device_id, channel_index)
+            await adapter.start(device_id, channel_index, barrier_at=command.barrier_at)
             self._touch(key)
             return {}
         if kind == AgentCommandKind.STOP:

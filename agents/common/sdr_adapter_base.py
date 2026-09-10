@@ -1,5 +1,5 @@
 """Shared vendor-agnostic `SDRAdapter` implementation for streaming, real
-hardware adapters (M9/M10, ADR-009/ADR-010).
+hardware adapters (M9/M10, ADR-009/ADR-010; extended M11/M12, ADR-013).
 
 `agents/common/x440_adapter.py` (UHD) and `agents/common/air7311_adapter.py`
 (SoapySDR) are both thin subclasses of `StreamingSDRAdapter` that supply a
@@ -15,13 +15,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 from agents.common import cache
+from agents.common.dsp import CoherentChannelDSPState
 from rogue.catalogue.sigmf import bytes_per_sample
 from rogue.compiler.models import PhysicalTxChannelCapability, RfWindow
 from rogue.domain.recording import IQRecording
@@ -89,16 +90,31 @@ class RealDeviceSeam(Protocol):
 
 
 @dataclass
+class _PerRecordingStream:
+    """One `CompositeChannel`'s contribution to a physical channel's mixed
+    output (M12/multi-recording, ADR-013) — a physical channel with a
+    single composite channel (the overwhelmingly common case) is just the
+    N=1 case of this.
+    """
+
+    recording_path: Path
+    gain_linear: float
+    dsp: CoherentChannelDSPState | None
+
+
+@dataclass
 class _ChannelState:
     leased: bool = False
     configured: bool = False
     armed: bool = False
     transmitting: bool = False
     start_at_seconds: float = 0.0
-    recording_path: Path | None = None
+    streams: list[_PerRecordingStream] = field(default_factory=list)
     sample_rate_hz: float | None = None
     sample_format: str | None = None
     stream_task: asyncio.Task[None] | None = None
+    actual_tx_start_at: datetime | None = None
+    last_error: str | None = None
 
 
 class StreamingSDRAdapter:
@@ -106,28 +122,42 @@ class StreamingSDRAdapter:
     streaming-capable vendor device family, parameterized by a
     `RealDeviceSeam` and a `device_family` label.
 
-    Scope, for both current subclasses (M9/M10, ADR-009/ADR-010):
+    Scope, for both current subclasses (M9/M10/M11/M12, ADR-009/ADR-010/ADR-013):
     - One physical unit per adapter instance — multi-unit-per-adapter
       scheduling isn't modelled; each Agent owns one adapter per device.
-    - Exactly one recording per physical channel — a window whose
-      composite channels reference more than one recording (two
-      co-located links sharing an RF window) would need real baseband
-      mixing to transmit correctly, which isn't modelled; `preflight`
-      rejects that case explicitly rather than transmitting something
-      wrong.
+    - One or more recordings per physical channel, one per `RfWindow`
+      composite channel (ADR-013 relaxes ADR-009's original one-recording
+      restriction): each stream is independently gain-scaled
+      (`CompositeChannel.gain_offset_db`) and, if it belongs to a coherent
+      group (ADR-012), independently DSP-processed (`agents/common/dsp.py`
+      — continuous Doppler-driven phase + a fractional-sample delay)
+      before every stream's chunk is summed into the channel's single
+      transmitted signal. A shorter recording contributes silence
+      (zero-padding) once exhausted while longer ones keep streaming — no
+      looping, matching the original single-recording behavior. Every
+      recording mixed onto one channel must share the same sample rate;
+      mismatched rates are rejected at `preflight` (no resampling is
+      attempted).
     - `cf32_le` recordings only — the sample format both vendor SDKs
       stream natively as host-side complex64; other formats are rejected
       at `preflight` with a clear error rather than a silent/lossy
       conversion.
-    - Streams the cached recording once through, start to EOF, then ends
-      the burst — no artificial looping and no attempt to align exactly to
-      the compiled window's `end_seconds` (that needs real
+    - Streams each cached recording once through, start to EOF, then ends
+      the burst once every stream in the mix is exhausted — no attempt to
+      align exactly to the compiled window's `end_seconds` (that needs real
       clock-referenced timed commands, an L3/L4 concern per
       `sdr-architecture.md` §5, out of scope here).
-    - No gain policy: `configure` uses a fixed default gain
-      (`DEFAULT_GAIN_DB`) since `RfWindow`/`CompositeChannel` don't carry
-      an absolute gain target yet (`gain_offset_db` is relative) —
-      flagged as a follow-up.
+    - `start()` accepts an optional `barrier_at` (M11, ADR-013): when given,
+      the actual keying is deferred to that wall-clock instant, letting the
+      control plane synchronize several channels' start across one or more
+      Agents (a software barrier, L1). This call always returns as soon as
+      the wait is *scheduled*, never once it fires — see `start()`'s own
+      docstring for why that's a correctness requirement, not a style
+      choice.
+    - No gain policy beyond each recording's own `gain_offset_db`: there is
+      still no absolute output-level/backoff target for the physical
+      channel as a whole (`configure` uses a fixed default device gain,
+      `DEFAULT_GAIN_DB`) — flagged as a follow-up, unchanged from M9.
     """
 
     def __init__(
@@ -190,25 +220,72 @@ class StreamingSDRAdapter:
     async def preflight(
         self, device_id: str, channel_index: int, window: RfWindow, recordings: list[IQRecording]
     ) -> None:
-        if len(recordings) != 1:
+        if len(recordings) < 1:
             raise AdapterOperationError(
                 device_id,
                 channel_index,
-                f"{type(self).__name__} supports exactly one recording per physical channel "
-                f"in this pass; this window needs {len(recordings)}",
+                f"{type(self).__name__} needs at least one recording for this channel",
             )
-        recording = recordings[0]
-        if recording.sample_format != SUPPORTED_SAMPLE_FORMAT:
+        for recording in recordings:
+            if recording.sample_format != SUPPORTED_SAMPLE_FORMAT:
+                raise AdapterOperationError(
+                    device_id,
+                    channel_index,
+                    f"{type(self).__name__} only supports {SUPPORTED_SAMPLE_FORMAT} recordings "
+                    f"in this pass; got {recording.sample_format!r}",
+                )
+        sample_rates = {recording.sample_rate_hz for recording in recordings}
+        if len(sample_rates) > 1:
             raise AdapterOperationError(
                 device_id,
                 channel_index,
-                f"{type(self).__name__} only supports {SUPPORTED_SAMPLE_FORMAT} recordings in "
-                f"this pass; got {recording.sample_format!r}",
+                f"{type(self).__name__} requires every recording mixed onto one physical "
+                f"channel to share a sample rate; got {sorted(sample_rates)}",
             )
+
+        recordings_by_ref = {
+            (recording.id, recording.version): recording for recording in recordings
+        }
+        streams: list[_PerRecordingStream] = []
+        for composite in window.channels:
+            key = (composite.recording.recording_id, composite.recording.version)
+            matched_recording = recordings_by_ref.get(key)
+            if matched_recording is None:
+                raise AdapterOperationError(
+                    device_id,
+                    channel_index,
+                    f"window references recording {key[0]} v{key[1]}, which wasn't provided "
+                    "to preflight",
+                )
+            dsp = None
+            if (
+                composite.delay_offset_s is not None
+                or composite.phase_offset_rad is not None
+                or composite.doppler_schedule is not None
+            ):
+                dsp = CoherentChannelDSPState(
+                    static_phase_rad=composite.phase_offset_rad or 0.0,
+                    delay_offset_s=composite.delay_offset_s or 0.0,
+                    doppler_schedule=composite.doppler_schedule or [],
+                )
+            streams.append(
+                _PerRecordingStream(
+                    recording_path=cache.data_path_for(
+                        self._cache_dir, matched_recording.id, matched_recording.version
+                    ),
+                    gain_linear=10 ** (composite.gain_offset_db / 20),
+                    dsp=dsp,
+                )
+            )
+        if not streams:
+            raise AdapterOperationError(
+                device_id, channel_index, "window has no composite channels to stream"
+            )
+
         state = self._state(channel_index)
-        state.recording_path = cache.data_path_for(self._cache_dir, recording.id, recording.version)
-        state.sample_rate_hz = recording.sample_rate_hz
-        state.sample_format = recording.sample_format
+        state.streams = streams
+        state.sample_rate_hz = next(iter(sample_rates))
+        state.sample_format = SUPPORTED_SAMPLE_FORMAT
 
     async def configure(self, device_id: str, channel_index: int, window: RfWindow) -> None:
         state = self._state(channel_index)
@@ -227,7 +304,9 @@ class StreamingSDRAdapter:
         self._state(channel_index).start_at_seconds = start_at_seconds
         self._state(channel_index).armed = True
 
-    async def start(self, device_id: str, channel_index: int) -> None:
+    async def start(
+        self, device_id: str, channel_index: int, barrier_at: datetime | None = None
+    ) -> None:
         if not self._enable_real_tx:
             raise RealTxNotAuthorizedError(
                 device_id,
@@ -236,32 +315,70 @@ class StreamingSDRAdapter:
                 "transmitter (CLAUDE.md §10)",
             )
         state = self._state(channel_index)
-        if state.recording_path is None or state.sample_format is None:
+        if not state.streams or state.sample_format is None:
             raise AdapterOperationError(
                 device_id,
                 channel_index,
                 "no recording was staged for this channel during preflight",
             )
+        state.last_error = None
+        # This must return once the keying is *scheduled*, not once it
+        # fires (M11, ADR-013): a real Agent's command loop
+        # (agents/common/agent.py) handles one NATS message at a time, so a
+        # synchronous wait here would desynchronize two channels owned by
+        # the same Agent in a barrier group — the second wouldn't even
+        # begin its own wait until the first's had already elapsed.
+        state.stream_task = asyncio.create_task(
+            self._run_stream(device_id, channel_index, state, barrier_at)
+        )
+
+    async def _run_stream(
+        self, device_id: str, channel_index: int, state: _ChannelState, barrier_at: datetime | None
+    ) -> None:
+        if barrier_at is not None:
+            delay = (barrier_at - datetime.now(UTC)).total_seconds()
+            if delay > 0:
+                await asyncio.sleep(delay)
         state.transmitting = True
-        state.stream_task = asyncio.create_task(self._stream(channel_index, state))
+        state.actual_tx_start_at = datetime.now(UTC)
+        try:
+            await self._stream(channel_index, state)
+        except Exception as exc:  # noqa: BLE001 - recorded for the orchestrator to observe via status()
+            state.last_error = str(exc)
+            raise
 
     async def _stream(self, channel_index: int, state: _ChannelState) -> None:
         import numpy as np
 
-        assert state.recording_path is not None
+        assert state.streams
         assert state.sample_format is not None
+        sample_rate_hz = state.sample_rate_hz
+        assert sample_rate_hz is not None
         sample_bytes = bytes_per_sample(state.sample_format)
         assert sample_bytes is not None  # already validated in preflight
         chunk_bytes = STREAM_CHUNK_SAMPLES * sample_bytes
+
+        files = [stream.recording_path.open("rb") for stream in state.streams]
         try:
-            with state.recording_path.open("rb") as f:
-                while True:
-                    chunk = await asyncio.to_thread(f.read, chunk_bytes)
-                    if not chunk:
-                        break
-                    samples = np.frombuffer(chunk, dtype=np.complex64)
-                    await asyncio.to_thread(self._device.send_chunk, channel_index, samples)
+            while True:
+                processed: list[np.ndarray] = []
+                max_len = 0
+                for stream, f in zip(state.streams, files, strict=True):
+                    raw = await asyncio.to_thread(f.read, chunk_bytes)
+                    samples = np.frombuffer(raw, dtype=np.complex64) * stream.gain_linear
+                    if stream.dsp is not None:
+                        samples = stream.dsp.process(samples, sample_rate_hz)
+                    processed.append(samples)
+                    max_len = max(max_len, samples.size)
+                if max_len == 0:
+                    break
+                combined = np.zeros(max_len, dtype=np.complex64)
+                for samples in processed:
+                    combined[: samples.size] += samples
+                await asyncio.to_thread(self._device.send_chunk, channel_index, combined)
         finally:
+            for f in files:
+                f.close()
             await asyncio.to_thread(self._device.end_burst, channel_index)
             state.transmitting = False
 
@@ -275,6 +392,7 @@ class StreamingSDRAdapter:
             state.stream_task = None
         state.transmitting = False
         state.armed = False
+        state.actual_tx_start_at = None
 
     async def stop(self, device_id: str, channel_index: int) -> None:
         await self._cancel_stream(channel_index)
@@ -290,6 +408,7 @@ class StreamingSDRAdapter:
         state = self._state(channel_index)
         state.transmitting = False
         state.armed = False
+        state.actual_tx_start_at = None
 
     async def status(self, device_id: str, channel_index: int) -> AdapterDeviceStatus:
         state = self._state(channel_index)
@@ -300,4 +419,6 @@ class StreamingSDRAdapter:
             configured=state.configured,
             armed=state.armed,
             transmitting=state.transmitting,
+            actual_tx_start_at=state.actual_tx_start_at,
+            last_error=state.last_error,
         )

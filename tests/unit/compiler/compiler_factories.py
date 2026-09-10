@@ -33,6 +33,7 @@ from rogue.domain.rf import (
     DroneRfLink,
     FrequencyBehaviour,
     FrequencySwitchingMode,
+    ResourcePreference,
     RfBand,
     RfEmission,
     RfLinkRole,
@@ -72,6 +73,7 @@ def make_link(
     band: RfBand | None = None,
     emissions: list[RfEmission] | None = None,
     array_group_id: UUID | None = None,
+    resource_preference: ResourcePreference | None = None,
     **behaviour_overrides: Any,
 ) -> DroneRfLink:
     behaviour_kwargs: dict[str, Any] = {"mode": mode}
@@ -99,6 +101,7 @@ def make_link(
         frequency_behaviour=FrequencyBehaviour(**behaviour_kwargs),
         emissions=emissions or [RfEmission(recording=recording_ref, start_offset=timedelta(0))],
         array_group_id=array_group_id,
+        resource_preference=resource_preference,
     )
 
 

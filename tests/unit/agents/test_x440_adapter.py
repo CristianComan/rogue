@@ -19,8 +19,9 @@ from agents.common.x440_adapter import (
     RealTxNotAuthorizedError,
 )
 
-from rogue.compiler.models import PhysicalTxChannelCapability, RfWindow
-from rogue.domain.recording import AccessClassification, IQRecording
+from rogue.compiler.models import CompositeChannel, PhysicalTxChannelCapability, RfWindow
+from rogue.domain.recording import AccessClassification, IQRecording, RecordingReference
+from rogue.domain.rf import RfLinkRole
 from rogue.execution.adapter import AdapterOperationError
 
 DEVICE_ID = "x440-1"
@@ -97,7 +98,30 @@ def make_recording(**overrides: object) -> IQRecording:
     return IQRecording(**kwargs)
 
 
-def make_window() -> RfWindow:
+def make_composite_channel(
+    recording_ref: RecordingReference, **overrides: object
+) -> CompositeChannel:
+    kwargs: dict[str, object] = {
+        "mission_id": uuid4(),
+        "link_id": uuid4(),
+        "role": RfLinkRole.C2,
+        "emission_id": uuid4(),
+        "center_frequency_hz": 2_450_000_000.0,
+        "bandwidth_hz": 20_000_000.0,
+        "gain_offset_db": 0.0,
+        "recording": recording_ref,
+    }
+    kwargs.update(overrides)
+    return CompositeChannel(**kwargs)
+
+
+def make_window(*recordings: IQRecording) -> RfWindow:
+    """A window with one CompositeChannel per given recording — `preflight`
+    now pairs each composite channel to its resolved recording (ADR-013),
+    so a window used with `preflight` needs one for each recording passed
+    there. Called with no args, this is a channel-less window (fine for
+    `configure`, which never reads `window.channels`).
+    """
     return RfWindow(
         id=uuid4(),
         window_key="w1",
@@ -105,7 +129,7 @@ def make_window() -> RfWindow:
         end_seconds=10.0,
         center_frequency_hz=2_450_000_000.0,
         bandwidth_hz=20_000_000.0,
-        channels=[],
+        channels=[make_composite_channel(recording.reference()) for recording in recordings],
     )
 
 
@@ -138,12 +162,36 @@ async def test_discover_reads_back_real_device_ranges(tmp_path: Path) -> None:
     assert capabilities[0].max_usable_bandwidth_hz == 400e6
 
 
-async def test_preflight_rejects_more_than_one_recording(tmp_path: Path) -> None:
+async def test_preflight_accepts_two_recordings_mixed_onto_one_channel(tmp_path: Path) -> None:
+    """ADR-013 relaxes ADR-009's original one-recording restriction — a
+    window with two composite channels (e.g. two drones sharing one
+    physical channel) is now accepted, each paired to its own recording.
+    """
     adapter, _device = make_adapter(tmp_path)
-    recordings = [make_recording(), make_recording()]
+    recording_a, recording_b = make_recording(), make_recording()
+    window = make_window(recording_a, recording_b)
+
+    await adapter.preflight(DEVICE_ID, CHANNEL, window, [recording_a, recording_b])  # no raise
+
+
+async def test_preflight_rejects_a_recording_the_window_doesnt_reference(tmp_path: Path) -> None:
+    adapter, _device = make_adapter(tmp_path)
+    recording = make_recording()
+    other_recording = make_recording(metadata_object_key="recordings/other.sigmf-meta")
+    window = make_window(recording)  # only references `recording`
 
     with pytest.raises(AdapterOperationError):
-        await adapter.preflight(DEVICE_ID, CHANNEL, make_window(), recordings)
+        await adapter.preflight(DEVICE_ID, CHANNEL, window, [other_recording])
+
+
+async def test_preflight_rejects_mismatched_sample_rates_across_recordings(tmp_path: Path) -> None:
+    adapter, _device = make_adapter(tmp_path)
+    recording_a = make_recording(sample_rate_hz=1_000_000.0)
+    recording_b = make_recording(sample_rate_hz=2_000_000.0)
+    window = make_window(recording_a, recording_b)
+
+    with pytest.raises(AdapterOperationError):
+        await adapter.preflight(DEVICE_ID, CHANNEL, window, [recording_a, recording_b])
 
 
 async def test_preflight_rejects_unsupported_sample_format(tmp_path: Path) -> None:
@@ -157,9 +205,9 @@ async def test_preflight_rejects_unsupported_sample_format(tmp_path: Path) -> No
 async def test_configure_calls_device_with_window_frequency(tmp_path: Path) -> None:
     adapter, device = make_adapter(tmp_path)
     recording = make_recording()
-    await adapter.preflight(DEVICE_ID, CHANNEL, make_window(), [recording])
+    await adapter.preflight(DEVICE_ID, CHANNEL, make_window(recording), [recording])
 
-    await adapter.configure(DEVICE_ID, CHANNEL, make_window())
+    await adapter.configure(DEVICE_ID, CHANNEL, make_window(recording))
 
     assert device.configured[CHANNEL]["freq_hz"] == 2_450_000_000.0
     assert device.configured[CHANNEL]["rate_hz"] == recording.sample_rate_hz
@@ -171,8 +219,8 @@ async def test_start_without_enable_real_tx_raises_and_does_not_touch_device(
     adapter, device = make_adapter(tmp_path, enable_real_tx=False)
     recording = make_recording()
     _write_cf32_samples(cache.data_path_for(tmp_path, recording.id, recording.version), 4)
-    await adapter.preflight(DEVICE_ID, CHANNEL, make_window(), [recording])
-    await adapter.configure(DEVICE_ID, CHANNEL, make_window())
+    await adapter.preflight(DEVICE_ID, CHANNEL, make_window(recording), [recording])
+    await adapter.configure(DEVICE_ID, CHANNEL, make_window(recording))
 
     with pytest.raises(RealTxNotAuthorizedError):
         await adapter.start(DEVICE_ID, CHANNEL)
@@ -184,8 +232,8 @@ async def test_start_streams_the_cached_recording_in_bounded_chunks(tmp_path: Pa
     adapter, device = make_adapter(tmp_path, enable_real_tx=True)
     recording = make_recording()
     _write_cf32_samples(cache.data_path_for(tmp_path, recording.id, recording.version), 4)
-    await adapter.preflight(DEVICE_ID, CHANNEL, make_window(), [recording])
-    await adapter.configure(DEVICE_ID, CHANNEL, make_window())
+    await adapter.preflight(DEVICE_ID, CHANNEL, make_window(recording), [recording])
+    await adapter.configure(DEVICE_ID, CHANNEL, make_window(recording))
 
     await adapter.start(DEVICE_ID, CHANNEL)
     stream_task = adapter._state(CHANNEL).stream_task
@@ -210,8 +258,8 @@ async def test_stop_cancels_an_in_flight_stream(tmp_path: Path) -> None:
     recording = make_recording()
     # A large file so the stream task is still running when we call stop().
     _write_cf32_samples(cache.data_path_for(tmp_path, recording.id, recording.version), 200_000)
-    await adapter.preflight(DEVICE_ID, CHANNEL, make_window(), [recording])
-    await adapter.configure(DEVICE_ID, CHANNEL, make_window())
+    await adapter.preflight(DEVICE_ID, CHANNEL, make_window(recording), [recording])
+    await adapter.configure(DEVICE_ID, CHANNEL, make_window(recording))
     await adapter.start(DEVICE_ID, CHANNEL)
 
     await adapter.stop(DEVICE_ID, CHANNEL)

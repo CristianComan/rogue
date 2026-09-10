@@ -17,7 +17,7 @@ from compiler_factories import (
 
 from rogue.compiler.compile import COMPILER_VERSION, compile_replay_plan
 from rogue.domain.receiver import ReceiverType
-from rogue.domain.rf import RfBand, ScriptedFrequencyChange
+from rogue.domain.rf import ResourcePreference, RfBand, ScriptedFrequencyChange, TimingSyncClass
 from rogue.domain.validation import ValidationSeverity
 
 
@@ -123,3 +123,68 @@ def test_compile_band_switch_propagates_to_realized_events_and_allocation() -> N
     assert len(plan.realized_frequency_events) == 2
     assert len(plan.rf_windows) == 2
     assert len(plan.allocations) == 2
+
+
+# --- required_sync_class aggregation (M11, ADR-013) -------------------------
+
+
+def test_compile_defaults_to_l0_when_no_link_declares_a_sync_class() -> None:
+    recording = make_recording(sample_rate_hz=1_000_000.0, duration_s=100.0)
+    link = make_link(recording.reference())
+    version = make_scenario_version([make_mission([link])], [recording.reference()])
+    recordings = {recording_key(recording.reference()): recording}
+    profile = make_capability_profile()
+
+    plan = compile_replay_plan(version, recordings, duration_s=10.0, capability_profile=profile)
+
+    assert plan.required_sync_class == TimingSyncClass.L0_SIMULATED
+    assert not any(f.code == "sync_class_not_achievable" for f in plan.findings)
+
+
+def test_compile_reports_the_strictest_requested_sync_class() -> None:
+    recording = make_recording(sample_rate_hz=1_000_000.0, duration_s=100.0)
+    band_a = RfBand(freq_min_hz=2_400_000_000.0, freq_max_hz=2_483_500_000.0)
+    band_b = RfBand(freq_min_hz=5_150_000_000.0, freq_max_hz=5_250_000_000.0)
+    link_lenient = make_link(
+        recording.reference(),
+        band=band_a,
+        resource_preference=ResourcePreference(
+            required_sync_class=TimingSyncClass.L1_SOFTWARE_BARRIER
+        ),
+    )
+    link_strict = make_link(
+        recording.reference(),
+        band=band_b,
+        scripted_changes=[ScriptedFrequencyChange(at_offset=timedelta(0), frequency_hz=5.2e9)],
+        resource_preference=ResourcePreference(
+            required_sync_class=TimingSyncClass.L2_SCHEDULED_LOCAL
+        ),
+    )
+    version = make_scenario_version(
+        [make_mission([link_lenient, link_strict])], [recording.reference()]
+    )
+    recordings = {recording_key(recording.reference()): recording}
+    profile = make_capability_profile()
+
+    plan = compile_replay_plan(version, recordings, duration_s=10.0, capability_profile=profile)
+
+    assert plan.required_sync_class == TimingSyncClass.L2_SCHEDULED_LOCAL
+
+
+def test_compile_warns_but_does_not_block_when_l3_is_requested() -> None:
+    recording = make_recording(sample_rate_hz=1_000_000.0, duration_s=100.0)
+    link = make_link(
+        recording.reference(),
+        resource_preference=ResourcePreference(
+            required_sync_class=TimingSyncClass.L3_SHARED_REFERENCE
+        ),
+    )
+    version = make_scenario_version([make_mission([link])], [recording.reference()])
+    recordings = {recording_key(recording.reference()): recording}
+    profile = make_capability_profile()
+
+    plan = compile_replay_plan(version, recordings, duration_s=10.0, capability_profile=profile)
+
+    assert plan.required_sync_class == TimingSyncClass.L3_SHARED_REFERENCE
+    warning = next(f for f in plan.findings if f.code == "sync_class_not_achievable")
+    assert warning.severity == ValidationSeverity.WARNING
