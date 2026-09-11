@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from rogue.api.idempotency import replay_or_execute
-from rogue.api.schemas import RunCreateRequest
+from rogue.api.schemas import RunCreateRequest, RunValidateRequest
 from rogue.db.session import get_session
 from rogue.domain.run import ScenarioRun
 from rogue.persistence import repository
@@ -102,6 +102,32 @@ async def stop_run(
 
     endpoint = f"POST /scenarios/{scenario_id}/replay-plans/{plan_id}/runs/{run_id}/stop"
     status_code, body = await replay_or_execute(session, idempotency_key, endpoint, "", execute)
+    return JSONResponse(status_code=status_code, content=body)
+
+
+@router.post("/{scenario_id}/replay-plans/{plan_id}/runs/{run_id}/validate")
+async def validate_run(
+    scenario_id: UUID,
+    plan_id: UUID,
+    run_id: UUID,
+    request: RunValidateRequest,
+    session: SessionDep,
+    idempotency_key: IdempotencyKeyHeader = None,
+) -> JSONResponse:
+    """Independent RF validation (M14): capture and compare against the
+    compiled plan at ``request.at_seconds``, appending evidence to the run.
+    """
+
+    async def execute() -> tuple[int, dict[str, Any]]:
+        run = await run_persistence.record_validation(
+            session, scenario_id, run_id, request.at_seconds
+        )
+        return 200, run.model_dump(mode="json")
+
+    endpoint = f"POST /scenarios/{scenario_id}/replay-plans/{plan_id}/runs/{run_id}/validate"
+    status_code, body = await replay_or_execute(
+        session, idempotency_key, endpoint, request.model_dump_json(), execute
+    )
     return JSONResponse(status_code=status_code, content=body)
 
 

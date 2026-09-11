@@ -23,7 +23,7 @@ Build ROGUE in bounded, testable increments. Do not begin with hardware-specific
 | M11 | Multi-SDR synchronization | declared timing class demonstrated and measured | L1 (software barrier) demonstrated and measured in simulation; L3/L4 declared but not achievable with current Agent capability — see ADR-012, ADR-013 |
 | M12 | Doppler/delay/phase processing | receiver-specific streams validated | Coherent-group Doppler-driven phase (continuous NCO) + piecewise delay applied during streaming, verified against a fake device seam — **hardware-unverified** — see ADR-012, ADR-013 |
 | M13 | TDOA/AOA receiver stimulation | relative delay/phase requirements demonstrated | Domain + compiler + execution-layer code complete (coherent-group allocation, Δφ/τ computation, streaming DSP application) — **hardware-unverified**, same constraint as M9/M10 — see ADR-012, ADR-013 |
-| M14 | Independent RF validation | measured RF evidence attached to run | Planned |
+| M14 | Independent RF validation | measured RF evidence attached to run | Domain + pure comparison + simulated-monitor adapter + orchestration + API code complete — **hardware-unverified**, same constraint as M9/M10/M12/M13 — see ADR-014 |
 
 ## 3. Feature sequence
 
@@ -460,6 +460,46 @@ across chunk boundaries — no hardware or mocks needed, matching CLAUDE.md §8)
 against the full `docker compose up` stack (2 simulated Agents already configured):
 compiled a coherent-group scenario with an `l1_software_barrier` link, walked
 prepare→arm→start, and confirmed a `sync_measured` event with sub-100ms skew.
+
+### M14 — Independent RF validation (domain + comparison + simulated monitor + orchestration + API)
+
+Branch `feature/independent-rf-validation`, based on `develop` after M11/M12/M13. See
+ADR-014 for the full scope record — summary below.
+
+**This environment has no spectrum analyzer or RX-SDR capture hardware**, so — matching
+M9/M10/M12/M13's exact constraint — the milestone's real exit criterion (measured RF
+evidence from an actual independent capture) is not met here. What was built and
+verified in software: a new `rogue.validation` package, architecturally independent of
+`rogue.execution` (CLAUDE.md rule 15) — `monitor_adapter.RfMonitorAdapter` is a distinct
+`Protocol` from `SDRAdapter`, with `MockRfMonitorAdapter` as its first-class simulated
+implementation (`sdr-architecture.md` §8's "not a throwaway mock" precedent, applied to
+the capture side). `compare.py` is a pure comparison function (frequency, bandwidth,
+timing, delay, phase, underrun) against the compiled `ReplayPlan`, reusing
+`rogue.domain.validation.ValidationSeverity`. `orchestrator.run_validation` captures
+every relevant `Receiver` at one explicit `at_seconds` instant — `MONITOR` receivers
+against every active `RfWindow`, `TDOA`/`AOA_DOA` receivers against their specific
+compiled `CompositeChannel`(s) — and appends the result to a new, additive
+`ScenarioRun.validation_reports` field (append-only, JSONB-compatible, no migration) plus
+a new `RunEventKind.VALIDATION_RECORDED` event.
+
+`rogue.persistence.run.record_validation` fetches the run/plan/scenario-version
+receivers and calls the orchestrator against a `_MONITOR_ADAPTER` singleton — a separate
+module-level singleton from the existing `_ADAPTER`, deliberately, so no state is shared
+between the TX and validation paths. New endpoint: `POST /scenarios/{id}/replay-plans/
+{plan_id}/runs/{run_id}/validate` (body `{"at_seconds": float}`, idempotency-key-wrapped
+like arm/start/stop); no new GET endpoint, since `GET .../runs/{run_id}` already returns
+the whole `ScenarioRun`.
+
+Backend test suite grew by 35 tests (395 -> 430): `tests/unit/domain/
+test_rf_validation.py`, `tests/unit/validation/` (`test_compare.py`,
+`test_monitor_adapter.py`, `test_validation_orchestrator.py` — named to avoid a pytest
+module-name collision with `tests/unit/execution/test_orchestrator.py`, matching M6's
+`test_replay_compiler.py` precedent), `tests/unit/persistence/
+test_run_validation_persistence.py` (DB-backed, same naming-collision precedent against
+`tests/unit/api/test_run_validation.py`), and `tests/unit/api/test_run_validation.py`.
+`ruff`/`mypy` both pass. No frontend changes (matches M11-M13's backend-only precedent);
+`validation_reports` is already visible through the existing run-fetch response for a
+future UI to consume.
 
 ## 4. Git workflow
 
