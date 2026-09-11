@@ -105,6 +105,16 @@ class RunCreateRequest(BaseModel):
     operator: str
 
 
+class RunValidateRequest(BaseModel):
+    """Request one independent RF validation capture at a scenario-time
+    instant (M14) — mirrors M5's ``at_seconds``/M6's ``duration_s``
+    explicit-horizon precedent rather than a continuous live monitor."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    at_seconds: float = Field(ge=0)
+
+
 class RecordingIngestRequest(BaseModel):
     """Register a SigMF asset pair already uploaded to object storage.
 

@@ -26,6 +26,7 @@ from uuid import UUID
 from pydantic import Field
 
 from rogue.domain.common import IdentifiedMixin, TimestampedMixin
+from rogue.domain.rf_validation import RfValidationReport
 from rogue.domain.validation import ValidationSeverity
 
 
@@ -65,6 +66,7 @@ class RunEventKind(StrEnum):
     EMERGENCY_STOPPED = "emergency_stopped"
     LEASE_RENEWED = "lease_renewed"
     SYNC_MEASURED = "sync_measured"
+    VALIDATION_RECORDED = "validation_recorded"
     ERROR = "error"
 
 
@@ -89,3 +91,5 @@ class ScenarioRun(IdentifiedMixin, TimestampedMixin):
     status: RunStatus = RunStatus.CREATED
     device_leases: list[DeviceLease] = Field(default_factory=list)
     events: list[RunEvent] = Field(default_factory=list)
+    # Independent RF validation evidence (M14) — append-only, same as `events`.
+    validation_reports: list[RfValidationReport] = Field(default_factory=list)

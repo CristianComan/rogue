@@ -46,13 +46,19 @@ from rogue.execution import orchestrator
 from rogue.execution.adapter import MockSDRAdapter, SDRAdapter
 from rogue.execution.remote_adapter import RemoteAgentAdapter
 from rogue.persistence import agents as agents_persistence
-from rogue.persistence import catalogue
+from rogue.persistence import catalogue, repository
 from rogue.persistence import replay as replay_persistence
 from rogue.persistence.repository import NotFoundError
+from rogue.validation import orchestrator as validation_orchestrator
+from rogue.validation.monitor_adapter import MockRfMonitorAdapter, RfMonitorAdapter
 
 logger = logging.getLogger("rogue.persistence.run")
 
 _ADAPTER: SDRAdapter = MockSDRAdapter(capabilities=DEFAULT_CAPABILITY_PROFILE.channels)
+# Independent RF validation (M14) — a separate module-level singleton from
+# _ADAPTER above, deliberately: rule 15 requires no shared state between the
+# TX command path and the validation/capture path.
+_MONITOR_ADAPTER: RfMonitorAdapter = MockRfMonitorAdapter()
 
 
 def configure_distributed_dispatch(
@@ -176,6 +182,38 @@ async def renew_run_leases(session: AsyncSession, scenario_id: UUID, run_id: UUI
     every ARMED/RUNNING run — the central half of lease enforcement
     (ADR-008)."""
     return await _advance(session, scenario_id, run_id, orchestrator.renew_leases)
+
+
+async def record_validation(
+    session: AsyncSession, scenario_id: UUID, run_id: UUID, at_seconds: float
+) -> ScenarioRun:
+    """Independent RF validation (M14): capture and compare against the
+    compiled plan at one scenario-time instant, appending evidence.
+
+    Fetches the scenario version's ``receivers`` the same way M8's agent
+    dispatch resolves recordings — a fresh read per call, not cached on the
+    module-level adapter singleton (a scenario version is immutable once
+    published, but a run's receivers aren't known until this is called).
+    """
+    row = await _get_run_row(session, scenario_id, run_id)
+    run = _orm_to_run(row)
+    plan = await _get_plan(session, scenario_id, run.replay_plan_id)
+    version = await repository.get_version(session, plan.scenario_id, plan.scenario_version_number)
+    if version is None:
+        raise NotFoundError(
+            f"scenario version {plan.scenario_version_number} of scenario {plan.scenario_id} "
+            "no longer exists"
+        )
+
+    validated = await validation_orchestrator.run_validation(
+        run, plan, version.receivers, _MONITOR_ADAPTER, at_seconds
+    )
+    validated = validated.model_copy(update={"updated_at": datetime.now(UTC)})
+
+    row.document = validated.model_dump(mode="json")
+    row.updated_at = validated.updated_at
+    await session.flush()
+    return validated
 
 
 async def get_run(session: AsyncSession, scenario_id: UUID, run_id: UUID) -> ScenarioRun | None:
