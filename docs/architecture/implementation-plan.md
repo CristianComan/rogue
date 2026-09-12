@@ -566,13 +566,29 @@ rule 12, mirroring `rogue.compiler.coherent_groups.expand_occupied_bands`'s exac
 precedent for the same class of error, rather than crashing the compile or transmitting
 unconditionally.
 
-Backend test suite grew by 12 tests: `tests/unit/spectrum/test_occupancy.py` (+9:
+Backend test suite grew by 13 tests: `tests/unit/spectrum/test_occupancy.py` (+9:
 zone-trigger point-query on/off/unresolvable-zone cases, `observed_by_receiver_id`
 passthrough, the unsupported-template BLOCKING-finding case) and `tests/unit/compiler/
-test_windows.py` (+3: a zone-triggered emission produces an `RfWindow` gated to its
+test_windows.py` (+4: a zone-triggered emission produces an `RfWindow` gated to its
 actual crossing interval rather than the full compile horizon, the same
-unsupported-template case surfacing through the compiler, `observed_by_receiver_id`
-surviving into `CompositeChannel`). `ruff`/`mypy` both pass. No API or frontend changes.
+unsupported-template case surfacing through the compiler, that same case with a delayed
+`AT_TIME_OFFSET` mission start, `observed_by_receiver_id` surviving into
+`CompositeChannel`). `ruff`/`mypy` both pass. No API or frontend changes.
+
+An ultra code review against this branch found that `_boundary_seconds`'s original
+"the real BLOCKING finding is already guaranteed to surface... at t=0" claim was false:
+for a mission with a delayed `AT_TIME_OFFSET` start, `evaluate_mission_position`'s
+"before start" early return covers every boundary that survives when zone-trigger
+boundaries are the only interesting ones, so an unsupported-template error was never
+actually reached — silently producing no window and no finding. Fixed by having
+`_boundary_seconds` report the finding itself (now returns `tuple[list[float],
+list[CompilerFinding]]`) rather than relying on a later stage to happen to hit the same
+error. The review's other two findings (a pre-existing window-coalescing gap that drops
+channel data when two emissions share a frequency/bandwidth, and `zone_trigger`/
+`observed_by_receiver_id`'s reliance on `validate_scenario_version` having already run)
+were verified and left as-is — the former reproduces identically on `develop` before this
+branch, the latter mirrors `array_group_id`'s own existing precedent and is safe because
+`publish_draft` already refuses to publish anything with BLOCKING findings. See ADR-016.
 
 ## 4. Git workflow
 

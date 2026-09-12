@@ -17,7 +17,13 @@ from compiler_factories import (
 
 from rogue.compiler.windows import compute_rf_windows
 from rogue.domain.common import GeoPoint, GeoPolygon
-from rogue.domain.mission import AltitudeReference, MissionTemplate, Trajectory, Waypoint
+from rogue.domain.mission import (
+    AltitudeReference,
+    MissionStartPolicy,
+    MissionTemplate,
+    Trajectory,
+    Waypoint,
+)
 from rogue.domain.receiver import ReceiverType
 from rogue.domain.rf import RfBand, RfEmission, ScriptedFrequencyChange, ZoneTriggerPolicy
 from rogue.domain.scenario import Zone, ZoneType
@@ -339,6 +345,45 @@ def test_zone_triggered_emission_unsupported_template_is_blocking() -> None:
         emissions=[RfEmission(recording=recording.reference(), zone_trigger=zone_trigger)],
     )
     mission = make_mission([link], trajectory=unsupported_trajectory)
+    version = make_scenario_version(
+        [mission], [recording.reference()], zones=[_MID_LEG_ZONE]
+    )
+    recordings = {recording_key(recording.reference()): recording}
+    profile = make_capability_profile()
+
+    windows, findings = compute_rf_windows(
+        version, recordings, duration_s=100.0, capability_profile=profile
+    )
+
+    assert windows == []
+    codes = {f.code for f in findings if f.severity == ValidationSeverity.BLOCKING}
+    assert "zone_trigger_position_unresolvable" in codes
+
+
+def test_zone_triggered_emission_unresolvable_mission_surfaces_even_with_delayed_start() -> None:
+    # A delayed AT_TIME_OFFSET start means evaluate_mission_position's "before
+    # start" early return covers every boundary _boundary_seconds discovers on
+    # its own ({0.0, duration_s}), so the unsupported RACETRACK template is
+    # never actually reached at either instant — this must still surface as a
+    # BLOCKING finding rather than silently producing no windows and no
+    # findings at all (see ADR-016).
+    unsupported_trajectory = Trajectory(
+        template=MissionTemplate.RACETRACK,
+        waypoints=_STRAIGHT_LEG.waypoints,
+        default_speed_mps=10.0,
+    )
+    recording = make_recording(sample_rate_hz=2_000_000.0, duration_s=1.0)
+    zone_trigger = ZoneTriggerPolicy(zone_id=_MID_LEG_ZONE.id)
+    link = make_link(
+        recording.reference(),
+        emissions=[RfEmission(recording=recording.reference(), zone_trigger=zone_trigger)],
+    )
+    mission = make_mission(
+        [link],
+        trajectory=unsupported_trajectory,
+        start_policy=MissionStartPolicy.AT_TIME_OFFSET,
+        start_time_offset=timedelta(seconds=50),
+    )
     version = make_scenario_version(
         [mission], [recording.reference()], zones=[_MID_LEG_ZONE]
     )

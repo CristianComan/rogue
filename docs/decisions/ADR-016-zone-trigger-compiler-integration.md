@@ -61,10 +61,18 @@ treated as **never active** rather than always-on:
   (`zone_trigger_position_unresolvable`), and that link contributes no occupied band for
   that instant — matching `rogue.compiler.coherent_groups.expand_occupied_bands`'s exact
   precedent for the same class of error.
-- In `_boundary_seconds`: caught and silently skipped (contributes no boundaries for that
-  emission) — this helper has no findings channel of its own, and the real BLOCKING
-  finding is already guaranteed to surface from `compute_spectrum_state` at `t=0`/
-  `t=duration_s` (always-present boundaries), so nothing is silently swallowed overall.
+- In `_boundary_seconds`: caught and reported as its own BLOCKING `CompilerFinding`
+  (same code), returned alongside the boundary list (`_boundary_seconds` now returns
+  `tuple[list[float], list[CompilerFinding]]`) — **not** silently skipped. An ultra code
+  review caught the original version of this ADR's claim that
+  `compute_spectrum_state` would independently catch the same error "at `t=0`/
+  `t=duration_s`" as false: for a mission with a delayed `AT_TIME_OFFSET` start,
+  `evaluate_mission_position`'s "before start" early return covers every boundary that
+  survives when zone-trigger boundaries are the only interesting ones ({0.0, duration_s}),
+  so the unsupported-template branch is never actually reached at either instant —
+  producing no window *and* no finding, reproduced directly before the fix. Fixed by
+  making `_boundary_seconds` report the finding itself rather than assuming a later stage
+  will.
 
 ## Consequences
 
@@ -84,7 +92,28 @@ treated as **never active** rather than always-on:
 - Backend test suite grew: `tests/unit/spectrum/test_occupancy.py` (+9: zone-trigger
   point-query on/off/unresolvable-zone cases, `observed_by_receiver_id` passthrough, the
   unsupported-template BLOCKING-finding case) and `tests/unit/compiler/test_windows.py`
-  (+3: a zone-triggered emission produces an `RfWindow` gated to its actual crossing
+  (+4: a zone-triggered emission produces an `RfWindow` gated to its actual crossing
   interval rather than the full compile horizon, the same unsupported-template BLOCKING
-  case surfacing through the compiler, `observed_by_receiver_id` surviving into
-  `CompositeChannel`). `ruff`/`mypy` both pass on all changed files.
+  case surfacing through the compiler, that same case with a delayed `AT_TIME_OFFSET`
+  mission start, `observed_by_receiver_id` surviving into `CompositeChannel`). `ruff`/
+  `mypy` both pass on all changed files.
+
+## Review findings not acted on
+
+An ultra code review of this branch also raised two findings verified but not fixed here:
+
+- `compute_rf_windows`'s window-coalescing step (extending an open window's
+  `end_seconds` when center/bandwidth match) doesn't refresh `channels`, so a second
+  emission on the same link that happens to land on the same frequency/bandwidth as the
+  first can have its channel data silently dropped from the merged window. Reproduced
+  directly, and confirmed present identically on `develop` *before* this branch — a
+  pre-existing gap this PR's `observed_by_receiver_id` passthrough sits next to but did
+  not introduce. Left for a separate, dedicated fix rather than folded in here.
+- `active_emission_at`/`_boundary_seconds` resolve `zone_trigger.zone_id` via a plain
+  dict lookup without re-checking the zone is `TRIGGER`-typed, relying entirely on
+  `rogue.domain.validation.validate_scenario_version` having already rejected any other
+  type at publish time. Verified this is safe in practice: `rogue.persistence.repository.
+  publish_draft` already refuses to publish a `ScenarioVersion` with BLOCKING findings,
+  and `compile_and_store_replay_plan` only ever compiles a published version — so this
+  mirrors `array_group_id`'s exact existing precedent (also never re-checked in the
+  compiler) rather than being a new gap.

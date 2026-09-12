@@ -21,6 +21,7 @@ from rogue.domain.common import GeoPoint, GeoPolygon
 from rogue.domain.mission import (
     AltitudeReference,
     DroneMission,
+    MissionStartPolicy,
     MissionTemplate,
     Platform,
     PlatformCategory,
@@ -139,12 +140,16 @@ def make_mission(
     *,
     waypoints: list[Waypoint] | None = None,
     trajectory: Trajectory | None = None,
+    start_policy: MissionStartPolicy = MissionStartPolicy.AT_SCENARIO_START,
+    start_time_offset: timedelta | None = None,
 ) -> DroneMission:
     return DroneMission(
         name="recon-1",
         platform=Platform(
             name="Generic Quad", category=PlatformCategory.MULTIROTOR, max_speed_mps=18.0
         ),
+        start_policy=start_policy,
+        start_time_offset=start_time_offset,
         trajectory=trajectory
         or Trajectory(
             template=MissionTemplate.WAYPOINT_TRANSIT,
