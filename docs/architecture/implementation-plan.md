@@ -24,7 +24,8 @@ Build ROGUE in bounded, testable increments. Do not begin with hardware-specific
 | M12 | Doppler/delay/phase processing | receiver-specific streams validated | Coherent-group Doppler-driven phase (continuous NCO) + piecewise delay applied during streaming, verified against a fake device seam — **hardware-unverified** — see ADR-012, ADR-013 |
 | M13 | TDOA/AOA receiver stimulation | relative delay/phase requirements demonstrated | Domain + compiler + execution-layer code complete (coherent-group allocation, Δφ/τ computation, streaming DSP application) — **hardware-unverified**, same constraint as M9/M10 — see ADR-012, ADR-013 |
 | M14 | Independent RF validation | measured RF evidence attached to run | Domain + pure comparison + simulated-monitor adapter + orchestration + API code complete — **hardware-unverified**, same constraint as M9/M10/M12/M13 — see ADR-014 |
-| M15 | Region and receiver simulation semantics | `NO_FLY` containment + `TRIGGER`-zone emission timing + receiver-observation reference are domain-modelled and validated | Domain model + reference-integrity validation + tests done — `feature/region-and-receiver-simulation-semantics`; **compiler integration (resolving `zone_trigger` into a window span, carrying `observed_by_receiver_id` through) is unbuilt follow-up** — see ADR-015 |
+| M15 | Region and receiver simulation semantics | `NO_FLY` containment + `TRIGGER`-zone emission timing + receiver-observation reference are domain-modelled and validated | Domain model + reference-integrity validation + tests done — `feature/region-and-receiver-simulation-semantics`; compiler integration was follow-up work, done in M16 — see ADR-015 |
+| M16 | Zone-trigger compiler integration | `zone_trigger` emissions resolve to real `RfWindow`/`CompositeChannel` output; `observed_by_receiver_id` survives into `CompositeChannel` | Done — `feature/zone-trigger-compiler-integration` — see ADR-016 |
 
 ## 3. Feature sequence
 
@@ -523,11 +524,7 @@ in the same `ScenarioVersion`) is a new pair of BLOCKING findings in
 trajectory-containment check (five-fraction-per-leg sampling — a documented approximation,
 not exact segment/polygon intersection).
 
-**Compiler integration is explicitly not built here** — `rogue.compiler.windows` still
-only resolves `start_offset`/`duration_override`, and `rogue.compiler.models.
-CompositeChannel` does not yet carry `observed_by_receiver_id` through. A
-`zone_trigger`-bearing `RfEmission` validates cleanly today but the compiler cannot yet
-turn it into an `RfWindow`/`Allocation`; that is unbuilt follow-up work, not claimed here.
+**Compiler integration was explicitly not built here** — see M16 below for that follow-up.
 
 Backend domain test suite grew by 30 tests (93 -> 123): `tests/unit/domain/
 test_geometry.py`, `test_mission_evaluator.py`, `test_rf.py` and `test_validation.py`.
@@ -541,6 +538,41 @@ producing false positives across the date line (fixed by `_antimeridian_aware_le
 a loop-scoping bug producing one duplicate finding per sample fraction instead of one per
 violation. All three fixed and covered by new regression tests before merge — see
 ADR-015.
+
+### M16 — Zone-trigger compiler integration
+
+Branch `feature/zone-trigger-compiler-integration`, based on `develop` after M15. See
+ADR-016 for the full scope record — summary below.
+
+Closes M15's explicitly deferred gap: `DroneRfLink.observed_by_receiver_id` is now a
+straight passthrough field on `rogue.spectrum.models.OccupiedBand` and
+`rogue.compiler.models.CompositeChannel`, set in `compute_spectrum_state` and copied
+through by `compute_rf_windows` — no new geometry needed, it's already fully resolved on
+the link. `RfEmission.zone_trigger` resolution is split into two costs: a cheap O(1)
+point-in-time query (`point_in_polygon` + one `evaluate_mission_position` call) in
+`rogue.spectrum.occupancy.active_emission_at`, asked once per boundary instant, versus a
+one-time whole-horizon interval scan (the existing `mission_evaluator.zone_crossings`) in
+`rogue.compiler.windows._boundary_seconds` to discover which instants matter at all —
+calling the expensive scan from the point-query path would have been correct but
+wasteful. `active_emission_at` gained two new required parameters (`mission`,
+`zones_by_id`); this is a public-function signature break contained entirely to
+`rogue.spectrum.occupancy` and its own test file (one production call site, in the same
+module, updated alongside it).
+
+A zone-triggered emission on a mission `evaluate_mission_position` can't evaluate
+(unsupported template, or `ON_EVENT`/`MANUAL` start policy) degrades to "never active"
+plus a BLOCKING `zone_trigger_position_unresolvable` finding — default-deny per CLAUDE.md
+rule 12, mirroring `rogue.compiler.coherent_groups.expand_occupied_bands`'s exact
+precedent for the same class of error, rather than crashing the compile or transmitting
+unconditionally.
+
+Backend test suite grew by 12 tests: `tests/unit/spectrum/test_occupancy.py` (+9:
+zone-trigger point-query on/off/unresolvable-zone cases, `observed_by_receiver_id`
+passthrough, the unsupported-template BLOCKING-finding case) and `tests/unit/compiler/
+test_windows.py` (+3: a zone-triggered emission produces an `RfWindow` gated to its
+actual crossing interval rather than the full compile horizon, the same
+unsupported-template case surfacing through the compiler, `observed_by_receiver_id`
+surviving into `CompositeChannel`). `ruff`/`mypy` both pass. No API or frontend changes.
 
 ## 4. Git workflow
 

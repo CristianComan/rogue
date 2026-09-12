@@ -16,9 +16,43 @@ from compiler_factories import (
 )
 
 from rogue.compiler.windows import compute_rf_windows
+from rogue.domain.common import GeoPoint, GeoPolygon
+from rogue.domain.mission import AltitudeReference, MissionTemplate, Trajectory, Waypoint
 from rogue.domain.receiver import ReceiverType
-from rogue.domain.rf import RfBand, RfEmission, ScriptedFrequencyChange
+from rogue.domain.rf import RfBand, RfEmission, ScriptedFrequencyChange, ZoneTriggerPolicy
+from rogue.domain.scenario import Zone, ZoneType
 from rogue.domain.validation import ValidationSeverity
+
+# A ~1000m leg due north at 10 m/s (~100s transit) — mirrors
+# tests/unit/domain/test_mission_evaluator.py's STRAIGHT_LEG fixture.
+_STRAIGHT_LEG = Trajectory(
+    template=MissionTemplate.WAYPOINT_TRANSIT,
+    waypoints=[
+        Waypoint(
+            sequence_index=0,
+            position=GeoPoint(coordinates=(13.4, 52.5)),
+            altitude_m=100.0,
+            altitude_reference=AltitudeReference.AGL,
+        ),
+        Waypoint(
+            sequence_index=1,
+            position=GeoPoint(coordinates=(13.4, 52.509)),
+            altitude_m=100.0,
+            altitude_reference=AltitudeReference.AGL,
+        ),
+    ],
+    default_speed_mps=10.0,
+)
+
+# Covers roughly the middle third of _STRAIGHT_LEG's transit.
+_MID_LEG_ZONE = Zone(
+    zone_type=ZoneType.TRIGGER,
+    polygon=GeoPolygon(
+        coordinates=[
+            [(13.39, 52.503), (13.41, 52.503), (13.41, 52.506), (13.39, 52.506), (13.39, 52.503)]
+        ]
+    ),
+)
 
 
 def test_single_link_produces_one_window_spanning_full_duration() -> None:
@@ -260,3 +294,77 @@ def test_idle_link_contributes_no_window() -> None:
 
     assert windows == []
     assert findings == []
+
+
+# --------------------------------------------------- zone_trigger (ADR-015 follow-up)
+
+
+def test_zone_triggered_emission_produces_window_only_during_crossing_interval() -> None:
+    recording = make_recording(sample_rate_hz=2_000_000.0, duration_s=1.0)
+    zone_trigger = ZoneTriggerPolicy(zone_id=_MID_LEG_ZONE.id)
+    link = make_link(
+        recording.reference(),
+        emissions=[RfEmission(recording=recording.reference(), zone_trigger=zone_trigger)],
+    )
+    mission = make_mission([link], trajectory=_STRAIGHT_LEG)
+    version = make_scenario_version(
+        [mission], [recording.reference()], zones=[_MID_LEG_ZONE]
+    )
+    recordings = {recording_key(recording.reference()): recording}
+    profile = make_capability_profile()
+
+    windows, findings = compute_rf_windows(
+        version, recordings, duration_s=100.0, capability_profile=profile
+    )
+
+    assert findings == []
+    assert len(windows) == 1
+    window = windows[0]
+    # Gated to the crossing interval, not the full [0, 100) compile horizon.
+    assert window.start_seconds > 0.0
+    assert window.end_seconds < 100.0
+    assert window.channels[0].emission_id == link.emissions[0].id
+
+
+def test_zone_triggered_emission_unsupported_template_is_blocking() -> None:
+    unsupported_trajectory = Trajectory(
+        template=MissionTemplate.RACETRACK,
+        waypoints=_STRAIGHT_LEG.waypoints,
+        default_speed_mps=10.0,
+    )
+    recording = make_recording(sample_rate_hz=2_000_000.0, duration_s=1.0)
+    zone_trigger = ZoneTriggerPolicy(zone_id=_MID_LEG_ZONE.id)
+    link = make_link(
+        recording.reference(),
+        emissions=[RfEmission(recording=recording.reference(), zone_trigger=zone_trigger)],
+    )
+    mission = make_mission([link], trajectory=unsupported_trajectory)
+    version = make_scenario_version(
+        [mission], [recording.reference()], zones=[_MID_LEG_ZONE]
+    )
+    recordings = {recording_key(recording.reference()): recording}
+    profile = make_capability_profile()
+
+    windows, findings = compute_rf_windows(
+        version, recordings, duration_s=100.0, capability_profile=profile
+    )
+
+    assert windows == []
+    codes = {f.code for f in findings if f.severity == ValidationSeverity.BLOCKING}
+    assert "zone_trigger_position_unresolvable" in codes
+
+
+def test_observed_by_receiver_id_survives_into_composite_channel() -> None:
+    receiver_id = uuid4()
+    recording = make_recording(sample_rate_hz=2_000_000.0, duration_s=100.0)
+    link = make_link(recording.reference(), observed_by_receiver_id=receiver_id)
+    version = make_scenario_version([make_mission([link])], [recording.reference()])
+    recordings = {recording_key(recording.reference()): recording}
+    profile = make_capability_profile()
+
+    windows, findings = compute_rf_windows(
+        version, recordings, duration_s=20.0, capability_profile=profile
+    )
+
+    assert findings == []
+    assert windows[0].channels[0].observed_by_receiver_id == receiver_id

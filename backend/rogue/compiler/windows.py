@@ -31,6 +31,7 @@ from rogue.compiler.models import (
     HardwareCapabilityProfile,
     RfWindow,
 )
+from rogue.domain.mission_evaluator import zone_crossings
 from rogue.domain.recording import IQRecording
 from rogue.domain.scenario import ScenarioVersion
 from rogue.domain.validation import ValidationSeverity
@@ -43,14 +44,43 @@ DEFAULT_GUARD_MARGIN_HZ = 100_000.0
 def _boundary_seconds(
     version: ScenarioVersion, recordings: Mapping[RecordingKey, IQRecording], duration_s: float
 ) -> list[float]:
-    """Every instant within [0, duration_s) where occupancy can change."""
+    """Every instant within [0, duration_s) where occupancy can change.
+
+    A ``zone_trigger`` emission (ADR-015) has no ``start_offset``/
+    ``duration_override`` to read (both fixed at their defaults by
+    ``RfEmission``'s own mutual-exclusion validator) — its on/off instants
+    come from ``mission_evaluator.zone_crossings`` scanning the whole
+    ``[0, duration_s)`` horizon instead, one call per zone-triggered
+    emission. An unresolvable ``zone_trigger.zone_id`` or a mission
+    ``zone_crossings`` can't evaluate (unsupported template/start policy)
+    contributes no boundaries here — best-effort, same precedent as this
+    function's own recording-unavailable skip below; ``compute_spectrum_state``
+    still surfaces the latter as a BLOCKING finding wherever it does get
+    evaluated.
+    """
     boundaries = {0.0, duration_s}
+    zones_by_id = {zone.id: zone for zone in version.zones}
     for mission in version.missions:
         for link in mission.rf_links:
             for event in realize_frequency_timeline(link, duration_s):
                 if 0.0 <= event.at_seconds < duration_s:
                     boundaries.add(event.at_seconds)
             for emission in link.emissions:
+                if emission.zone_trigger is not None:
+                    zone = zones_by_id.get(emission.zone_trigger.zone_id)
+                    if zone is None:
+                        continue
+                    try:
+                        crossings = zone_crossings(mission, zone.polygon, 0.0, duration_s)
+                    except NotImplementedError:
+                        continue
+                    for interval_start, interval_end in crossings:
+                        if 0.0 <= interval_start < duration_s:
+                            boundaries.add(interval_start)
+                        if 0.0 < interval_end < duration_s:
+                            boundaries.add(interval_end)
+                    continue
+
                 start = emission.start_offset.total_seconds()
                 if 0.0 <= start < duration_s:
                     boundaries.add(start)
@@ -235,6 +265,7 @@ def compute_rf_windows(
                     bandwidth_hz=b.bandwidth_hz,
                     gain_offset_db=0.0,
                     recording=b.recording,
+                    observed_by_receiver_id=b.observed_by_receiver_id,
                     coherent_group_id=b.coherent_group_id,
                     array_element_receiver_id=b.array_element_receiver_id,
                     phase_offset_rad=b.phase_offset_rad,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from uuid import UUID, uuid4
 
 from spectrum_factories import (
     make_link,
@@ -12,12 +13,59 @@ from spectrum_factories import (
     recording_key,
 )
 
-from rogue.domain.rf import FrequencySwitchingMode, RfBand, RfEmission, ScriptedFrequencyChange
+from rogue.domain.common import GeoPoint, GeoPolygon
+from rogue.domain.mission import (
+    AltitudeReference,
+    MissionTemplate,
+    Trajectory,
+    Waypoint,
+)
+from rogue.domain.recording import RecordingReference
+from rogue.domain.rf import (
+    DroneRfLink,
+    FrequencySwitchingMode,
+    RfBand,
+    RfEmission,
+    ScriptedFrequencyChange,
+    ZoneTriggerPolicy,
+)
+from rogue.domain.scenario import Zone, ZoneType
 from rogue.domain.validation import ValidationSeverity
 from rogue.spectrum.occupancy import (
     active_emission_at,
     compute_spectrum_state,
     resolve_frequency_hz,
+)
+
+# A ~1000m leg due north (mirrors tests/unit/domain/test_mission_evaluator.py's
+# STRAIGHT_LEG) — easy to reason about crossing timing at 10 m/s (~100s transit).
+_STRAIGHT_LEG = Trajectory(
+    template=MissionTemplate.WAYPOINT_TRANSIT,
+    waypoints=[
+        Waypoint(
+            sequence_index=0,
+            position=GeoPoint(coordinates=(13.4, 52.5)),
+            altitude_m=100.0,
+            altitude_reference=AltitudeReference.AGL,
+        ),
+        Waypoint(
+            sequence_index=1,
+            position=GeoPoint(coordinates=(13.4, 52.509)),
+            altitude_m=100.0,
+            altitude_reference=AltitudeReference.AGL,
+        ),
+    ],
+    default_speed_mps=10.0,
+)
+
+# Covers roughly the middle third of _STRAIGHT_LEG's transit.
+_MID_LEG_ZONE = Zone(
+    zone_type=ZoneType.TRIGGER,
+    polygon=GeoPolygon(
+        coordinates=[
+            [(13.39, 52.503), (13.41, 52.503), (13.41, 52.506), (13.39, 52.506), (13.39, 52.503)]
+        ]
+    ),
 )
 
 # ------------------------------------------------------------- resolve_frequency_hz
@@ -126,12 +174,13 @@ def test_active_emission_at_within_window() -> None:
         recording.reference(),
         emissions=[RfEmission(recording=recording.reference(), start_offset=timedelta(seconds=5))],
     )
+    mission = make_mission([link])
     recordings = {recording_key(recording.reference()): recording}
 
-    assert active_emission_at(link, 4.9, recordings) is None
-    assert active_emission_at(link, 5.0, recordings) is not None
-    assert active_emission_at(link, 14.9, recordings) is not None
-    assert active_emission_at(link, 15.0, recordings) is None
+    assert active_emission_at(mission, link, 4.9, recordings, {}) is None
+    assert active_emission_at(mission, link, 5.0, recordings, {}) is not None
+    assert active_emission_at(mission, link, 14.9, recordings, {}) is not None
+    assert active_emission_at(mission, link, 15.0, recordings, {}) is None
 
 
 def test_active_emission_at_loop_repeats_indefinitely() -> None:
@@ -142,9 +191,10 @@ def test_active_emission_at_loop_repeats_indefinitely() -> None:
             RfEmission(recording=recording.reference(), start_offset=timedelta(0), loop=True)
         ],
     )
+    mission = make_mission([link])
     recordings = {recording_key(recording.reference()): recording}
 
-    assert active_emission_at(link, 999.0, recordings) is not None
+    assert active_emission_at(mission, link, 999.0, recordings, {}) is not None
 
 
 def test_active_emission_at_unknown_duration_assumed_active() -> None:
@@ -154,8 +204,9 @@ def test_active_emission_at_unknown_duration_assumed_active() -> None:
         recording.reference(),
         emissions=[RfEmission(recording=recording.reference(), start_offset=timedelta(0))],
     )
+    mission = make_mission([link])
 
-    assert active_emission_at(link, 999.0, recordings={}) is not None
+    assert active_emission_at(mission, link, 999.0, recordings={}, zones_by_id={}) is not None
 
 
 # ------------------------------------------------------------- compute_spectrum_state
@@ -263,3 +314,100 @@ def test_compute_spectrum_state_idle_link_contributes_nothing() -> None:
 
     assert state.occupied_bands == []
     assert state.findings == []
+
+
+# --------------------------------------------------- zone_trigger (ADR-015 follow-up)
+
+
+def _zone_triggered_link(recording_ref: RecordingReference, zone_id: UUID) -> DroneRfLink:
+    zone_trigger = ZoneTriggerPolicy(zone_id=zone_id)
+    return make_link(
+        recording_ref,
+        emissions=[RfEmission(recording=recording_ref, zone_trigger=zone_trigger)],
+    )
+
+
+def test_active_emission_at_zone_trigger_off_before_entering_zone() -> None:
+    recording = make_recording()
+    link = _zone_triggered_link(recording.reference(), _MID_LEG_ZONE.id)
+    mission = make_mission([link], trajectory=_STRAIGHT_LEG)
+    zones_by_id = {_MID_LEG_ZONE.id: _MID_LEG_ZONE}
+
+    assert active_emission_at(mission, link, 0.0, recordings={}, zones_by_id=zones_by_id) is None
+
+
+def test_active_emission_at_zone_trigger_on_inside_zone() -> None:
+    recording = make_recording()
+    link = _zone_triggered_link(recording.reference(), _MID_LEG_ZONE.id)
+    mission = make_mission([link], trajectory=_STRAIGHT_LEG)
+    zones_by_id = {_MID_LEG_ZONE.id: _MID_LEG_ZONE}
+
+    # ~50s in is roughly the midpoint of the leg (see test_mission_evaluator.py's
+    # equivalent straight-leg interpolation case) — inside _MID_LEG_ZONE.
+    result = active_emission_at(mission, link, 50.0, recordings={}, zones_by_id=zones_by_id)
+    assert result is not None
+
+
+def test_active_emission_at_zone_trigger_unresolvable_zone_never_active() -> None:
+    recording = make_recording()
+    link = _zone_triggered_link(recording.reference(), uuid4())
+    mission = make_mission([link], trajectory=_STRAIGHT_LEG)
+
+    assert active_emission_at(mission, link, 50.0, recordings={}, zones_by_id={}) is None
+
+
+def test_compute_spectrum_state_zone_trigger_produces_band_inside_zone() -> None:
+    recording = make_recording(sample_rate_hz=2_000_000.0)
+    link = _zone_triggered_link(recording.reference(), _MID_LEG_ZONE.id)
+    mission = make_mission([link], trajectory=_STRAIGHT_LEG)
+    version = make_scenario_version([mission], [recording.reference()], zones=[_MID_LEG_ZONE])
+    recordings = {recording_key(recording.reference()): recording}
+
+    outside = compute_spectrum_state(version, at_seconds=0.0, recordings=recordings)
+    inside = compute_spectrum_state(version, at_seconds=50.0, recordings=recordings)
+
+    assert outside.occupied_bands == []
+    assert len(inside.occupied_bands) == 1
+
+
+def test_compute_spectrum_state_zone_trigger_unsupported_template_is_blocking() -> None:
+    unsupported_trajectory = Trajectory(
+        template=MissionTemplate.RACETRACK,
+        waypoints=_STRAIGHT_LEG.waypoints,
+        default_speed_mps=10.0,
+    )
+    recording = make_recording(sample_rate_hz=2_000_000.0)
+    link = _zone_triggered_link(recording.reference(), _MID_LEG_ZONE.id)
+    mission = make_mission([link], trajectory=unsupported_trajectory)
+    version = make_scenario_version([mission], [recording.reference()], zones=[_MID_LEG_ZONE])
+    recordings = {recording_key(recording.reference()): recording}
+
+    state = compute_spectrum_state(version, at_seconds=50.0, recordings=recordings)
+
+    assert state.occupied_bands == []
+    codes = {f.code for f in state.findings if f.severity == ValidationSeverity.BLOCKING}
+    assert "zone_trigger_position_unresolvable" in codes
+
+
+def test_compute_spectrum_state_carries_observed_by_receiver_id_through() -> None:
+    receiver_id = uuid4()
+    recording = make_recording(sample_rate_hz=2_000_000.0)
+    link = make_link(recording.reference(), observed_by_receiver_id=receiver_id)
+    version = make_scenario_version([make_mission([link])], [recording.reference()])
+    recordings = {recording_key(recording.reference()): recording}
+
+    state = compute_spectrum_state(version, at_seconds=0.0, recordings=recordings)
+
+    assert len(state.occupied_bands) == 1
+    assert state.occupied_bands[0].observed_by_receiver_id == receiver_id
+
+
+def test_compute_spectrum_state_observed_by_receiver_id_defaults_to_none() -> None:
+    recording = make_recording(sample_rate_hz=2_000_000.0)
+    link = make_link(recording.reference())
+    version = make_scenario_version([make_mission([link])], [recording.reference()])
+    recordings = {recording_key(recording.reference()): recording}
+
+    state = compute_spectrum_state(version, at_seconds=0.0, recordings=recordings)
+
+    assert state.occupied_bands[0].observed_by_receiver_id is None

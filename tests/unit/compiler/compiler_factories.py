@@ -39,7 +39,7 @@ from rogue.domain.rf import (
     RfLinkRole,
     ScriptedFrequencyChange,
 )
-from rogue.domain.scenario import ScenarioVersion
+from rogue.domain.scenario import ScenarioVersion, Zone
 
 VALID_SHA256 = "a" * 64
 
@@ -74,6 +74,7 @@ def make_link(
     emissions: list[RfEmission] | None = None,
     array_group_id: UUID | None = None,
     resource_preference: ResourcePreference | None = None,
+    observed_by_receiver_id: UUID | None = None,
     **behaviour_overrides: Any,
 ) -> DroneRfLink:
     behaviour_kwargs: dict[str, Any] = {"mode": mode}
@@ -102,6 +103,7 @@ def make_link(
         emissions=emissions or [RfEmission(recording=recording_ref, start_offset=timedelta(0))],
         array_group_id=array_group_id,
         resource_preference=resource_preference,
+        observed_by_receiver_id=observed_by_receiver_id,
     )
 
 
@@ -133,14 +135,18 @@ def make_receiver(
 
 
 def make_mission(
-    rf_links: list[DroneRfLink], *, waypoints: list[Waypoint] | None = None
+    rf_links: list[DroneRfLink],
+    *,
+    waypoints: list[Waypoint] | None = None,
+    trajectory: Trajectory | None = None,
 ) -> DroneMission:
     return DroneMission(
         name="recon-1",
         platform=Platform(
             name="Generic Quad", category=PlatformCategory.MULTIROTOR, max_speed_mps=18.0
         ),
-        trajectory=Trajectory(
+        trajectory=trajectory
+        or Trajectory(
             template=MissionTemplate.WAYPOINT_TRANSIT,
             waypoints=waypoints
             or [
@@ -168,11 +174,13 @@ def make_scenario_version(
     recordings: list[RecordingReference],
     *,
     receivers: list[Receiver] | None = None,
+    zones: list[Zone] | None = None,
 ) -> ScenarioVersion:
     return ScenarioVersion(
         id=uuid4(),
         scenario_id=uuid4(),
         version_number=1,
+        zones=zones or [],
         missions=missions,
         receivers=receivers or [],
         recordings=recordings,
