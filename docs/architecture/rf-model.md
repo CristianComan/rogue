@@ -103,7 +103,10 @@ The planner/compiler shall:
 Each receiver has geodetic position and type.
 
 ### Single-channel monitoring
-Generate the applicable received emission mixture with configured propagation effects.
+Generate the applicable received emission mixture with configured propagation effects. A `DroneRfLink` may optionally name the single `MONITOR` receiver that "hears" it (`observed_by_receiver_id`) — informational only, for the planning sync matrix/run channel display; it does not affect channel count, allocation or the mixture itself (see ADR-015).
+
+### Zone-triggered emissions
+An `RfEmission` may derive its active span from a `TRIGGER`-typed `Zone` instead of an authored `start_offset`/`duration_override`: the emission is active for exactly the sub-intervals the mission's trajectory is inside the zone's polygon (`rogue.domain.mission_evaluator.zone_crossings`, ~1s sampling cadence — a documented approximation, not sub-sample-interpolated crossing instants). This slice adds the domain primitive and reference-integrity validation only; `rogue.compiler.windows` does not yet resolve `zone_trigger` into a window span (it only reads `start_offset`/`duration_override` today) — that compiler integration is unbuilt follow-up work, not claimed here (see ADR-015).
 
 ### TDOA
 For transmitter position `p_tx(t)` and receiver `r_k`, geometric delay is conceptually:

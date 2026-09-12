@@ -6,17 +6,55 @@ import math
 
 import pytest
 
-from rogue.domain.common import GeoPoint
+from rogue.domain.common import GeoPoint, GeoPolygon
 from rogue.domain.geometry import (
     EARTH_RADIUS_M,
     bearing_degrees,
     haversine_distance_m,
     horizontal_los_unit_vector,
+    point_in_polygon,
 )
 
 
 def point(lon: float, lat: float) -> GeoPoint:
     return GeoPoint(coordinates=(lon, lat))
+
+
+SQUARE = GeoPolygon(coordinates=[[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0)]])
+
+
+def test_point_in_polygon_true_for_interior_point() -> None:
+    assert point_in_polygon(point(0.5, 0.5), SQUARE) is True
+
+
+def test_point_in_polygon_false_for_exterior_point() -> None:
+    assert point_in_polygon(point(2.0, 2.0), SQUARE) is False
+
+
+def test_point_in_polygon_false_just_outside_edge() -> None:
+    assert point_in_polygon(point(-0.001, 0.5), SQUARE) is False
+
+
+def test_point_in_polygon_true_just_inside_edge() -> None:
+    assert point_in_polygon(point(0.001, 0.5), SQUARE) is True
+
+
+def test_point_in_polygon_handles_3d_ring_coordinates() -> None:
+    # GeoPolygon rings may carry altitude (GeoPosition3D); containment
+    # should ignore the extra element rather than fail to unpack.
+    square_3d = GeoPolygon(
+        coordinates=[
+            [
+                (0.0, 0.0, 10.0),
+                (1.0, 0.0, 10.0),
+                (1.0, 1.0, 10.0),
+                (0.0, 1.0, 10.0),
+                (0.0, 0.0, 10.0),
+            ]
+        ]
+    )
+    assert point_in_polygon(point(0.5, 0.5), square_3d) is True
+    assert point_in_polygon(point(2.0, 2.0), square_3d) is False
 
 
 def test_haversine_distance_to_self_is_zero() -> None:

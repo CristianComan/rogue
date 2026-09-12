@@ -6,7 +6,7 @@ from datetime import timedelta
 from uuid import uuid4
 
 import pytest
-from factories import drone_rf_link_kwargs, rf_band_kwargs
+from factories import drone_rf_link_kwargs, recording_reference, rf_band_kwargs
 from pydantic import ValidationError
 
 from rogue.domain.rf import (
@@ -16,6 +16,7 @@ from rogue.domain.rf import (
     ResourcePreference,
     RfBand,
     RfEmission,
+    ZoneTriggerPolicy,
 )
 
 
@@ -96,3 +97,57 @@ def test_silence_emission_round_trips() -> None:
     dumped = emission.model_dump(mode="json")
     restored = RfEmission.model_validate(dumped)
     assert restored.recording is None
+
+
+def test_zone_triggered_emission_requires_a_recording() -> None:
+    with pytest.raises(ValidationError):
+        RfEmission(recording=None, zone_trigger=ZoneTriggerPolicy(zone_id=uuid4()))
+
+
+def test_zone_triggered_emission_rejects_duration_override() -> None:
+    with pytest.raises(ValidationError):
+        RfEmission(
+            recording=recording_reference(),
+            zone_trigger=ZoneTriggerPolicy(zone_id=uuid4()),
+            duration_override=timedelta(seconds=5),
+        )
+
+
+def test_zone_triggered_emission_rejects_non_default_start_offset() -> None:
+    with pytest.raises(ValidationError):
+        RfEmission(
+            recording=recording_reference(),
+            zone_trigger=ZoneTriggerPolicy(zone_id=uuid4()),
+            start_offset=timedelta(seconds=1),
+        )
+
+
+def test_zone_triggered_emission_rejects_loop() -> None:
+    with pytest.raises(ValidationError):
+        RfEmission(
+            recording=recording_reference(),
+            zone_trigger=ZoneTriggerPolicy(zone_id=uuid4()),
+            loop=True,
+        )
+
+
+def test_zone_triggered_emission_valid_and_round_trips() -> None:
+    zone_id = uuid4()
+    emission = RfEmission(
+        recording=recording_reference(), zone_trigger=ZoneTriggerPolicy(zone_id=zone_id)
+    )
+    restored = RfEmission.model_validate(emission.model_dump(mode="json"))
+    assert restored.zone_trigger is not None
+    assert restored.zone_trigger.zone_id == zone_id
+
+
+def test_observed_by_receiver_id_defaults_to_none() -> None:
+    link = DroneRfLink(**drone_rf_link_kwargs())
+    assert link.observed_by_receiver_id is None
+
+
+def test_observed_by_receiver_id_round_trips() -> None:
+    receiver_id = uuid4()
+    link = DroneRfLink(**drone_rf_link_kwargs(observed_by_receiver_id=receiver_id))
+    restored = DroneRfLink.model_validate(link.model_dump(mode="json"))
+    assert restored.observed_by_receiver_id == receiver_id
