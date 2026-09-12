@@ -22,7 +22,11 @@ from rogue.domain.mission import (
     Trajectory,
     Waypoint,
 )
-from rogue.domain.mission_evaluator import evaluate_mission_position, zone_crossings
+from rogue.domain.mission_evaluator import (
+    evaluate_mission_position,
+    orbit_period_seconds,
+    zone_crossings,
+)
 
 PLATFORM = Platform(name="test-quad", category=PlatformCategory.MULTIROTOR, max_speed_mps=20.0)
 
@@ -127,13 +131,26 @@ def test_orbit_position_at_t_zero_is_east_of_center() -> None:
 
 def test_orbit_loops_indefinitely() -> None:
     # A full period later, position should return to (approximately) the start.
-    radius_m = 100.0
-    speed_mps = 10.0
-    period_s = 2 * 3.141592653589793 * radius_m / speed_mps
+    period_s = orbit_period_seconds(ORBIT)
     start = evaluate_mission_position(mission(ORBIT), 0.0)
     after_one_period = evaluate_mission_position(mission(ORBIT), period_s)
     assert after_one_period.longitude == pytest.approx(start.longitude, abs=1e-6)
     assert after_one_period.latitude == pytest.approx(start.latitude, abs=1e-6)
+
+
+def test_orbit_period_seconds_matches_circumference_over_speed() -> None:
+    expected = 2 * 3.141592653589793 * 100.0 / 10.0
+    assert orbit_period_seconds(ORBIT) == pytest.approx(expected)
+
+
+def test_orbit_period_seconds_is_zero_for_degenerate_orbit() -> None:
+    zero_radius = Trajectory(
+        template=MissionTemplate.ORBIT,
+        waypoints=[waypoint(0, 13.4, 52.5), waypoint(1, 13.41, 52.5)],
+        default_speed_mps=10.0,
+        template_parameters={"radius_m": 0.0},
+    )
+    assert orbit_period_seconds(zero_radius) == 0.0
 
 
 def test_unsupported_template_raises_not_implemented() -> None:

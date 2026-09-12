@@ -135,6 +135,24 @@ def _evaluate_orbit_position(trajectory: Trajectory, mission_time_s: float) -> G
     return _point_on_circle(center, radius_m, angle_deg)
 
 
+def orbit_period_seconds(trajectory: Trajectory) -> float:
+    """Time for one full ORBIT lap, or ``0.0`` for a degenerate (zero-radius
+    or zero-speed) orbit that never moves.
+
+    An ORBIT mission loops indefinitely and retraces the same circle every
+    lap, so a caller that needs to observe the *whole* geometric path (e.g.
+    ``rogue.domain.validation``'s ``NO_FLY`` containment check, which has no
+    other natural time bound for a template that never "finishes") only
+    needs to sample one period via ``zone_crossings`` — matches
+    ``_evaluate_orbit_position``'s own angular-velocity formula.
+    """
+    _, radius_m = _orbit_center_and_radius(trajectory)
+    speed_mps = trajectory.default_speed_mps
+    if radius_m <= 0 or speed_mps <= 0:
+        return 0.0
+    return 2 * math.pi * radius_m / speed_mps
+
+
 def evaluate_mission_position(mission: DroneMission, at_seconds: float) -> GeoPoint:
     """The drone's horizontal position at scenario time ``at_seconds``.
 

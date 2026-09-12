@@ -529,9 +529,18 @@ CompositeChannel` does not yet carry `observed_by_receiver_id` through. A
 `zone_trigger`-bearing `RfEmission` validates cleanly today but the compiler cannot yet
 turn it into an `RfWindow`/`Allocation`; that is unbuilt follow-up work, not claimed here.
 
-Backend domain test suite grew by 24 tests (93 -> 117): `tests/unit/domain/
+Backend domain test suite grew by 30 tests (93 -> 123): `tests/unit/domain/
 test_geometry.py`, `test_mission_evaluator.py`, `test_rf.py` and `test_validation.py`.
 `ruff`/`mypy` both pass. No API, compiler or frontend changes.
+
+An ultra code review against this branch found three real bugs in the first version of
+the `NO_FLY` containment check: `ORBIT` missions sampled the wrong geometry (the raw
+waypoint chord, not the actual circular path — `_orbit_no_fly_findings` now samples via
+`zone_crossings`/`orbit_period_seconds` instead), a naive-longitude antimeridian bug
+producing false positives across the date line (fixed by `_antimeridian_aware_lerp`), and
+a loop-scoping bug producing one duplicate finding per sample fraction instead of one per
+violation. All three fixed and covered by new regression tests before merge — see
+ADR-015.
 
 ## 4. Git workflow
 

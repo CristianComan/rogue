@@ -78,14 +78,30 @@ integrity (must resolve to a `MONITOR`-type `Receiver`) is checked the same way 
 ### `NO_FLY` containment check
 
 `rogue.domain.validation._no_fly_containment_findings` is a new BLOCKING, plan-time
-(publish) check: no mission's trajectory may enter a `NO_FLY` zone. It samples each
-waypoint-to-waypoint leg at five fixed fractions (endpoints + quarters) rather than
-`zone_crossings`'s full sampling cadence — this only needs a yes/no containment answer
-over the mission's whole authored span, not interval boundaries, so a coarser, bounded
-sample per leg is enough. This is a documented approximation, not exact-geometry
+(publish) check: no mission's trajectory may enter a `NO_FLY` zone. Non-`ORBIT` templates
+sample each waypoint-to-waypoint leg at five fixed fractions (endpoints + quarters) rather
+than `zone_crossings`'s full sampling cadence — this only needs a yes/no containment
+answer over the mission's whole authored span, not interval boundaries, so a coarser,
+bounded sample per leg is enough. This is a documented approximation, not exact-geometry
 segment/polygon intersection; a mission whose leg clips a thin sliver of a `NO_FLY` zone
 between sample fractions would not be caught. Tightening this (adaptive sampling, or true
 segment/polygon intersection) is possible future follow-up, not attempted here.
+
+`ORBIT` is handled separately (`_orbit_no_fly_findings`): its two waypoints are a
+center/radius reference, not path points, so chord-sampling between them checks the wrong
+geometry entirely. It instead samples the real circular path via `zone_crossings`/
+`evaluate_mission_position` over one full lap (`mission_evaluator.orbit_period_seconds` —
+an orbit repeats identically forever, so one period is sufficient to observe the whole
+path), and skips (rather than crashes) missions whose start policy isn't evaluable from
+scenario time alone, matching `_resolvable_span_seconds`'s best-effort precedent.
+
+Per-leg interpolation for the non-`ORBIT` path takes the shorter path across the +/-180
+antimeridian (`_antimeridian_aware_lerp`) rather than naive linear longitude
+interpolation, which would otherwise sweep the "long way" through longitude 0 for a short
+hop across the date line and produce false-positive findings against zones nowhere near
+the true path. A finding is emitted at most once per (mission leg, zone) pair — checked
+across all sample fractions with `any()` — rather than once per matching fraction, so a
+leg fully inside one zone is reported once, not five times.
 
 ## Consequences
 
@@ -102,11 +118,20 @@ segment/polygon intersection) is possible future follow-up, not attempted here.
 - `_no_fly_containment_findings`'s five-fraction-per-leg sampling is a documented,
   bounded approximation (matching `zone_crossings`'s own approximation precedent), not a
   claim of exact geometric intersection.
-- Backend domain test suite grew by 24 tests (93 -> 117): `tests/unit/domain/
+- Backend domain test suite grew by 30 tests (93 -> 123): `tests/unit/domain/
   test_geometry.py` (point-in-polygon, including 3D-ring-coordinate handling),
   `test_mission_evaluator.py` (`zone_crossings` no-crossing / bounded-interior /
-  open-ended-at-window-end / `NotImplementedError`-propagation cases), `test_rf.py`
-  (`ZoneTriggerPolicy` mutual-exclusion validators, `observed_by_receiver_id`
-  round-tripping), and `test_validation.py` (the two new reference-integrity finding
-  functions plus `NO_FLY` containment, both blocking and passing cases). `ruff`/`mypy`
-  both pass on all changed files.
+  open-ended-at-window-end / `NotImplementedError`-propagation cases, plus
+  `orbit_period_seconds`), `test_rf.py` (`ZoneTriggerPolicy` mutual-exclusion
+  validators, `observed_by_receiver_id` round-tripping), and `test_validation.py` (the
+  two new reference-integrity finding functions plus `NO_FLY` containment for both
+  straight-leg and `ORBIT` missions, the antimeridian case, and the one-finding-per-leg
+  case). `ruff`/`mypy` both pass on all changed files.
+- An ultra code review (multi-agent, run against this branch before merge) found and
+  reproduced three real defects in the first version of `_no_fly_containment_findings`:
+  `ORBIT` missions checked against the wrong geometry (the raw waypoint chord instead of
+  the actual circular path), a naive-longitude-interpolation antimeridian bug producing
+  false positives, and a `break` that only escaped the inner per-zone loop, producing one
+  duplicate finding per sample fraction instead of one per violation. All three are fixed
+  as described above and locked in by the added regression tests, discovered and
+  addressed within this same ADR/branch rather than shipped and fixed later.

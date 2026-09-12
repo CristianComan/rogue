@@ -330,3 +330,108 @@ def test_mission_trajectory_avoiding_no_fly_zone_is_not_blocking() -> None:
 
     codes = {f.code for f in findings if f.severity == ValidationSeverity.BLOCKING}
     assert "no_fly_trajectory_containment" not in codes
+
+
+def test_orbit_mission_entering_no_fly_zone_is_blocking() -> None:
+    # ORBIT's two waypoints are a center/radius reference, not path points —
+    # both sit far from the zone below, but the real circular path (radius
+    # 2000m around the center) sweeps through it. A chord-based check
+    # between the raw waypoints would miss this entirely.
+    ref = recording_reference()
+    orbit_trajectory = Trajectory(
+        template=MissionTemplate.ORBIT,
+        waypoints=[waypoint(0, 13.40, 52.50), waypoint(1, 13.401, 52.501)],
+        default_speed_mps=10.0,
+        template_parameters={"radius_m": 2000.0},
+    )
+    mission = DroneMission(**drone_mission_kwargs(recording=ref, trajectory=orbit_trajectory))
+    no_fly_zone = make_zone(
+        zone_type=ZoneType.NO_FLY,
+        polygon=GeoPolygon(
+            coordinates=[
+                [(13.42, 52.49), (13.44, 52.49), (13.44, 52.51), (13.42, 52.51), (13.42, 52.49)]
+            ]
+        ),
+    )
+    version = ScenarioVersion(
+        **scenario_version_kwargs(missions=[mission], recordings=[ref], zones=[no_fly_zone])
+    )
+
+    findings = validate_scenario_version(version)
+
+    codes = {f.code for f in findings if f.severity == ValidationSeverity.BLOCKING}
+    assert "no_fly_trajectory_containment" in codes
+
+
+def test_orbit_mission_avoiding_no_fly_zone_is_not_blocking() -> None:
+    ref = recording_reference()
+    orbit_trajectory = Trajectory(
+        template=MissionTemplate.ORBIT,
+        waypoints=[waypoint(0, 13.40, 52.50), waypoint(1, 13.401, 52.501)],
+        default_speed_mps=10.0,
+        template_parameters={"radius_m": 50.0},
+    )
+    mission = DroneMission(**drone_mission_kwargs(recording=ref, trajectory=orbit_trajectory))
+    far_zone = make_zone(
+        zone_type=ZoneType.NO_FLY,
+        polygon=GeoPolygon(
+            coordinates=[[(20.0, 10.0), (21.0, 10.0), (21.0, 11.0), (20.0, 11.0), (20.0, 10.0)]]
+        ),
+    )
+    version = ScenarioVersion(
+        **scenario_version_kwargs(missions=[mission], recordings=[ref], zones=[far_zone])
+    )
+
+    findings = validate_scenario_version(version)
+
+    codes = {f.code for f in findings if f.severity == ValidationSeverity.BLOCKING}
+    assert "no_fly_trajectory_containment" not in codes
+
+
+def test_mission_trajectory_crossing_antimeridian_does_not_false_positive() -> None:
+    # A short ~0.2 deg hop across the +/-180 date line. A zone at longitude
+    # 0 is nowhere near the true short path; naive linear lon interpolation
+    # would sweep the "long way" through 0 and wrongly flag it.
+    ref = recording_reference()
+    far_side_zone = make_zone(
+        zone_type=ZoneType.NO_FLY,
+        polygon=GeoPolygon(
+            coordinates=[[(-1.0, 9.0), (1.0, 9.0), (1.0, 11.0), (-1.0, 11.0), (-1.0, 9.0)]]
+        ),
+    )
+    mission = _straight_line_mission(ref, (179.9, 10.0), (-179.9, 10.0))
+    version = ScenarioVersion(
+        **scenario_version_kwargs(missions=[mission], recordings=[ref], zones=[far_side_zone])
+    )
+
+    findings = validate_scenario_version(version)
+
+    codes = {f.code for f in findings if f.severity == ValidationSeverity.BLOCKING}
+    assert "no_fly_trajectory_containment" not in codes
+
+
+def test_leg_fully_inside_no_fly_zone_produces_exactly_one_finding() -> None:
+    ref = recording_reference()
+    no_fly_zone = make_zone(
+        zone_type=ZoneType.NO_FLY,
+        polygon=GeoPolygon(
+            coordinates=[
+                [
+                    (13.39, 52.499),
+                    (13.43, 52.499),
+                    (13.43, 52.501),
+                    (13.39, 52.501),
+                    (13.39, 52.499),
+                ]
+            ]
+        ),
+    )
+    mission = _straight_line_mission(ref, (13.40, 52.50), (13.42, 52.50))
+    version = ScenarioVersion(
+        **scenario_version_kwargs(missions=[mission], recordings=[ref], zones=[no_fly_zone])
+    )
+
+    findings = validate_scenario_version(version)
+
+    matching = [f for f in findings if f.code == "no_fly_trajectory_containment"]
+    assert len(matching) == 1
