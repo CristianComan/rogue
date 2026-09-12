@@ -24,6 +24,7 @@ Build ROGUE in bounded, testable increments. Do not begin with hardware-specific
 | M12 | Doppler/delay/phase processing | receiver-specific streams validated | Coherent-group Doppler-driven phase (continuous NCO) + piecewise delay applied during streaming, verified against a fake device seam — **hardware-unverified** — see ADR-012, ADR-013 |
 | M13 | TDOA/AOA receiver stimulation | relative delay/phase requirements demonstrated | Domain + compiler + execution-layer code complete (coherent-group allocation, Δφ/τ computation, streaming DSP application) — **hardware-unverified**, same constraint as M9/M10 — see ADR-012, ADR-013 |
 | M14 | Independent RF validation | measured RF evidence attached to run | Domain + pure comparison + simulated-monitor adapter + orchestration + API code complete — **hardware-unverified**, same constraint as M9/M10/M12/M13 — see ADR-014 |
+| M15 | Region and receiver simulation semantics | `NO_FLY` containment + `TRIGGER`-zone emission timing + receiver-observation reference are domain-modelled and validated | Domain model + reference-integrity validation + tests done — `feature/region-and-receiver-simulation-semantics`; **compiler integration (resolving `zone_trigger` into a window span, carrying `observed_by_receiver_id` through) is unbuilt follow-up** — see ADR-015 |
 
 ## 3. Feature sequence
 
@@ -500,6 +501,37 @@ test_run_validation_persistence.py` (DB-backed, same naming-collision precedent 
 `ruff`/`mypy` both pass. No frontend changes (matches M11-M13's backend-only precedent);
 `validation_reports` is already visible through the existing run-fetch response for a
 future UI to consume.
+
+### M15 — Region and receiver simulation semantics (domain + validation)
+
+Branch `feature/region-and-receiver-simulation-semantics`, based on `develop` after M14.
+See ADR-015 for the full scope record — summary below.
+
+Two domain-model gaps closed: a mission's trajectory can now be checked against `NO_FLY`
+zones, and an `RfEmission` can derive its active span from entering/leaving a
+`TRIGGER`-typed `Zone` instead of an authored `start_offset`/`duration_override`.
+`rogue.domain.geometry.point_in_polygon` adds a planar ray-casting containment test
+against `GeoPolygon`'s exterior ring; `rogue.domain.mission_evaluator.zone_crossings`
+samples `evaluate_mission_position` at ~1s cadence (mirroring
+`compute_doppler_schedule`'s sampling precedent) to report the sub-intervals a mission is
+inside a zone, serving both the `NO_FLY` containment check and `TRIGGER`-zone emission
+timing from one primitive. `RfEmission.zone_trigger: ZoneTriggerPolicy | None` and
+`DroneRfLink.observed_by_receiver_id: UUID | None` are both new, additive, `None`-default
+fields; reference integrity for both (resolving to a `TRIGGER` zone / `MONITOR` receiver
+in the same `ScenarioVersion`) is a new pair of BLOCKING findings in
+`rogue.domain.validation.validate_scenario_version`, alongside a new BLOCKING `NO_FLY`
+trajectory-containment check (five-fraction-per-leg sampling — a documented approximation,
+not exact segment/polygon intersection).
+
+**Compiler integration is explicitly not built here** — `rogue.compiler.windows` still
+only resolves `start_offset`/`duration_override`, and `rogue.compiler.models.
+CompositeChannel` does not yet carry `observed_by_receiver_id` through. A
+`zone_trigger`-bearing `RfEmission` validates cleanly today but the compiler cannot yet
+turn it into an `RfWindow`/`Allocation`; that is unbuilt follow-up work, not claimed here.
+
+Backend domain test suite grew by 24 tests (93 -> 117): `tests/unit/domain/
+test_geometry.py`, `test_mission_evaluator.py`, `test_rf.py` and `test_validation.py`.
+`ruff`/`mypy` both pass. No API, compiler or frontend changes.
 
 ## 4. Git workflow
 

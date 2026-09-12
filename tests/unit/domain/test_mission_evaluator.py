@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from rogue.domain.common import GeoPoint
+from rogue.domain.common import GeoPoint, GeoPolygon
 from rogue.domain.mission import (
     AltitudeReference,
     DroneMission,
@@ -22,7 +22,7 @@ from rogue.domain.mission import (
     Trajectory,
     Waypoint,
 )
-from rogue.domain.mission_evaluator import evaluate_mission_position
+from rogue.domain.mission_evaluator import evaluate_mission_position, zone_crossings
 
 PLATFORM = Platform(name="test-quad", category=PlatformCategory.MULTIROTOR, max_speed_mps=20.0)
 
@@ -150,3 +150,53 @@ def test_on_event_start_policy_raises_not_implemented() -> None:
     m = mission(STRAIGHT_LEG, start_policy=MissionStartPolicy.ON_EVENT)
     with pytest.raises(NotImplementedError):
         evaluate_mission_position(m, 0.0)
+
+
+# Straddles the middle third of STRAIGHT_LEG's ~100s transit (see
+# test_position_interpolates_mid_leg): the mission enters partway through
+# the window and exits before the end, giving one bounded interior interval.
+MID_LEG_ZONE = GeoPolygon(
+    coordinates=[
+        [(13.39, 52.503), (13.41, 52.503), (13.41, 52.506), (13.39, 52.506), (13.39, 52.503)]
+    ]
+)
+
+
+def test_zone_crossings_reports_no_interval_when_never_inside() -> None:
+    far_away_zone = GeoPolygon(
+        coordinates=[[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0)]]
+    )
+    intervals = zone_crossings(mission(STRAIGHT_LEG), far_away_zone, 0.0, 100.0)
+    assert intervals == []
+
+
+def test_zone_crossings_reports_bounded_interior_interval() -> None:
+    intervals = zone_crossings(mission(STRAIGHT_LEG), MID_LEG_ZONE, 0.0, 100.0)
+    assert len(intervals) == 1
+    start, end = intervals[0]
+    assert 0.0 < start < end < 100.0
+
+
+def test_zone_crossings_open_ended_interval_extends_to_window_end() -> None:
+    # A polygon covering the tail of the leg: mission is still inside at
+    # window_end, so the interval should be reported as extending to it
+    # rather than being dropped for lacking an observed exit sample.
+    tail_zone = GeoPolygon(
+        coordinates=[
+            [(13.39, 52.505), (13.41, 52.505), (13.41, 52.51), (13.39, 52.51), (13.39, 52.505)]
+        ]
+    )
+    intervals = zone_crossings(mission(STRAIGHT_LEG), tail_zone, 0.0, 100.0)
+    assert len(intervals) == 1
+    _start, end = intervals[0]
+    assert end == 100.0
+
+
+def test_zone_crossings_propagates_not_implemented_for_unsupported_template() -> None:
+    racetrack = Trajectory(
+        template=MissionTemplate.RACETRACK,
+        waypoints=[waypoint(0, 13.4, 52.5), waypoint(1, 13.41, 52.5)],
+        default_speed_mps=10.0,
+    )
+    with pytest.raises(NotImplementedError):
+        zone_crossings(mission(racetrack), MID_LEG_ZONE, 0.0, 100.0)

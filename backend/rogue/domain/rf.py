@@ -50,6 +50,21 @@ class RfBand(RogueModel):
         return self
 
 
+class ZoneTriggerPolicy(RogueModel):
+    """Derives an ``RfEmission``'s active span from a scenario ``Zone``
+    instead of ``start_offset``/``duration_override`` (region simulation
+    semantics, ADR-015): the emission is active for exactly the sub-
+    intervals its mission's trajectory is inside ``zone_id``'s polygon,
+    computed by ``rogue.domain.mission_evaluator.zone_crossings``.
+    Reference integrity (``zone_id`` must resolve to a ``TRIGGER``-typed
+    ``Zone`` in the same ``ScenarioVersion``) is a cross-entity concern,
+    checked by ``rogue.domain.validation.validate_scenario_version``, not
+    here — this field alone doesn't know the scenario's zones.
+    """
+
+    zone_id: UUID
+
+
 class RfEmission(IdentifiedMixin):
     """A logical scheduled span on a DroneRfLink's timeline. Not a physical TX channel.
 
@@ -58,22 +73,49 @@ class RfEmission(IdentifiedMixin):
     scheduling anything there. A signal-of-interest vs. background-only span
     is not a separate flag here — it follows from the referenced recording's
     ``IQRecording.kind``.
+
+    ``zone_trigger``, when set, replaces ``start_offset``/``duration_override``
+    as the source of this emission's active span entirely (mutually
+    exclusive — see the validator below): a "trigger region" scenario, where
+    entering/leaving a zone starts/stops the signal, rather than an authored
+    fixed time window.
     """
 
     recording: RecordingReference | None = None
     start_offset: timedelta = timedelta(0)
     duration_override: timedelta | None = None
+    zone_trigger: ZoneTriggerPolicy | None = None
     gain_offset_db: float = 0.0
     loop: bool = False
     notes: str | None = None
 
     @model_validator(mode="after")
     def _silence_requires_explicit_duration(self) -> RfEmission:
-        if self.recording is None and self.duration_override is None:
+        if self.recording is None and self.duration_override is None and self.zone_trigger is None:
             raise ValueError(
                 "an emission with no recording (an explicit silence span) requires "
                 "duration_override"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _zone_trigger_excludes_manual_timing(self) -> RfEmission:
+        if self.zone_trigger is None:
+            return self
+        if self.recording is None:
+            raise ValueError("a zone-triggered emission requires a recording")
+        if self.duration_override is not None:
+            raise ValueError(
+                "a zone-triggered emission's duration is derived from zone crossings, not "
+                "duration_override"
+            )
+        if self.start_offset != timedelta(0):
+            raise ValueError(
+                "a zone-triggered emission's start is derived from zone crossings, not "
+                "start_offset"
+            )
+        if self.loop:
+            raise ValueError("a zone-triggered emission cannot also loop")
         return self
 
 
@@ -191,6 +233,20 @@ class DroneRfLink(IdentifiedMixin):
     # rogue.domain.validation.validate_scenario_version, not here — this
     # field alone doesn't know the scenario's receivers.
     array_group_id: UUID | None = None
+
+    # Which single MONITOR receiver, if any, "hears" this link's emissions
+    # (region/receiver simulation semantics, ADR-015) — orthogonal to
+    # array_group_id above (TDOA/AOA_DOA coherent groups): purely
+    # informational for now (intended for a future planning sync matrix /
+    # run channel display), never changing channel count or allocation
+    # (unlike array_group_id). rogue.compiler.models.CompositeChannel does
+    # not carry this through yet — that's unbuilt follow-up work, not
+    # claimed here. A link with no receiver at all is simply replayed with
+    # no geometry applied — this field is optional and independent of that.
+    # Reference integrity (must resolve to a MONITOR-type Receiver) is
+    # checked by rogue.domain.validation.validate_scenario_version,
+    # mirroring array_group_id's own precedent.
+    observed_by_receiver_id: UUID | None = None
 
     @field_validator("emissions")
     @classmethod

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 
-from rogue.domain.common import GeoPoint
+from rogue.domain.common import GeoPoint, GeoPolygon
 
 EARTH_RADIUS_M = 6_371_000.0
 SPEED_OF_LIGHT_MPS = 299_792_458.0
@@ -34,6 +34,27 @@ def bearing_degrees(a: GeoPoint, b: GeoPoint) -> float:
     y = math.sin(d_lon) * math.cos(lat2)
     x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(d_lon)
     return (math.degrees(math.atan2(y, x)) + 360) % 360
+
+
+def point_in_polygon(point: GeoPoint, polygon: GeoPolygon) -> bool:
+    """Ray-casting point-in-polygon test against ``polygon``'s exterior ring
+    (``GeoPolygon``'s own docstring: "first ring is the exterior boundary" —
+    interior rings/holes are not modelled, matching every other consumer of
+    this type). Operates directly on (lon, lat) as a planar ring, the same
+    simplification MapLibre's own rendering already makes for these
+    zone/area polygons — adequate at the scenario-authoring scale this
+    system operates at (city-block to city-scale areas), not a claim of
+    geodesic correctness for very large or pole-spanning polygons.
+    """
+    ring = polygon.coordinates[0]
+    x, y = point.longitude, point.latitude
+    inside = False
+    for (x1, y1, *_), (x2, y2, *_) in zip(ring, ring[1:], strict=False):
+        if (y1 > y) != (y2 > y):
+            x_intersect = x1 + (y - y1) * (x2 - x1) / (y2 - y1)
+            if x < x_intersect:
+                inside = not inside
+    return inside
 
 
 def horizontal_los_unit_vector(from_point: GeoPoint, to_point: GeoPoint) -> tuple[float, float]:

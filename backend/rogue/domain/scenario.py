@@ -37,6 +37,7 @@ class ZoneType(StrEnum):
     NO_TRANSMIT = "no_transmit"
     NO_FLY = "no_fly"
     RESTRICTED = "restricted"
+    TRIGGER = "trigger"
     CUSTOM = "custom"
 
 

@@ -16,13 +16,22 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from rogue.domain.common import RogueModel
+from rogue.domain.common import GeoPoint, RogueModel
+from rogue.domain.geometry import point_in_polygon
+from rogue.domain.receiver import ReceiverType
 from rogue.domain.timeline import MissionRelativeTimelineEvent
 
 if TYPE_CHECKING:
     from rogue.domain.receiver import Receiver
     from rogue.domain.rf import RfEmission
     from rogue.domain.scenario import ScenarioVersion
+
+# ZoneType lives in rogue.domain.scenario, which imports this module for
+# ValidationFinding — importing ZoneType here at module level would be
+# circular. Zone.zone_type is a StrEnum, so comparing against its string
+# value works identically without the import.
+_TRIGGER_ZONE_TYPE = "trigger"
+_NO_FLY_ZONE_TYPE = "no_fly"
 
 
 class ValidationSeverity(StrEnum):
@@ -95,6 +104,111 @@ def _coherent_group_findings(version: ScenarioVersion) -> list[ValidationFinding
     return findings
 
 
+def _zone_reference_findings(version: ScenarioVersion) -> list[ValidationFinding]:
+    """Region simulation semantics (ADR-015): ``RfEmission.zone_trigger.zone_id``
+    must resolve to a ``TRIGGER``-typed ``Zone``, and
+    ``DroneRfLink.observed_by_receiver_id`` must resolve to a ``MONITOR``-typed
+    ``Receiver`` — the reference-integrity half, mirroring
+    ``_coherent_group_findings``'s precedent for ``array_group_id``. The
+    geometry/compiler half (deriving active spans / gated intervals from
+    ``rogue.domain.mission_evaluator.zone_crossings`` and applying them in
+    ``rogue.compiler.windows``/``rogue.spectrum.occupancy``) is unbuilt
+    follow-up work — this reference-integrity check just ensures a future
+    compiler pass would have a resolvable zone/receiver to work from.
+    """
+    findings: list[ValidationFinding] = []
+    zones_by_id = {zone.id: zone for zone in version.zones}
+    receivers_by_id = {receiver.id: receiver for receiver in version.receivers}
+
+    for mission_index, mission in enumerate(version.missions):
+        for link_index, link in enumerate(mission.rf_links):
+            link_path = f"missions[{mission_index}].rf_links[{link_index}]"
+
+            if link.observed_by_receiver_id is not None:
+                receiver = receivers_by_id.get(link.observed_by_receiver_id)
+                if receiver is None or receiver.receiver_type != ReceiverType.MONITOR:
+                    findings.append(
+                        ValidationFinding(
+                            severity=ValidationSeverity.BLOCKING,
+                            code="observed_by_receiver_unresolvable",
+                            message=(
+                                f"observed_by_receiver_id {link.observed_by_receiver_id} must "
+                                "resolve to a MONITOR receiver in this ScenarioVersion's receivers"
+                            ),
+                            path=f"{link_path}.observed_by_receiver_id",
+                        )
+                    )
+
+            for emission_index, emission in enumerate(link.emissions):
+                if emission.zone_trigger is None:
+                    continue
+                emission_path = f"{link_path}.emissions[{emission_index}].zone_trigger"
+                zone = zones_by_id.get(emission.zone_trigger.zone_id)
+                if zone is None or zone.zone_type != _TRIGGER_ZONE_TYPE:
+                    findings.append(
+                        ValidationFinding(
+                            severity=ValidationSeverity.BLOCKING,
+                            code="zone_trigger_reference_unresolvable",
+                            message=(
+                                f"zone_trigger.zone_id {emission.zone_trigger.zone_id} must "
+                                "resolve to a TRIGGER-typed Zone in this ScenarioVersion's zones"
+                            ),
+                            path=emission_path,
+                        )
+                    )
+
+    return findings
+
+
+_NO_FLY_SAMPLE_FRACTIONS = (0.0, 0.25, 0.5, 0.75, 1.0)
+
+
+def _no_fly_containment_findings(version: ScenarioVersion) -> list[ValidationFinding]:
+    """Region simulation semantics (ADR-015): a mission's trajectory must
+    never enter a ``NO_FLY`` zone — BLOCKING, checked at plan-time
+    (publish), not runtime. Samples each waypoint-to-waypoint leg at a
+    handful of fractions (endpoints + quarters) rather than
+    ``mission_evaluator.zone_crossings``'s full sampling cadence — this only
+    needs a yes/no containment answer over the mission's whole authored
+    span, not interval boundaries, so a coarser, bounded sample per leg is
+    enough (a documented approximation, not exact-geometry segment/polygon
+    intersection).
+    """
+    findings: list[ValidationFinding] = []
+    no_fly_zones = [z for z in version.zones if z.zone_type == _NO_FLY_ZONE_TYPE]
+    if not no_fly_zones:
+        return findings
+
+    for mission_index, mission in enumerate(version.missions):
+        waypoints = sorted(mission.trajectory.waypoints, key=lambda w: w.sequence_index)
+        for from_wp, to_wp in zip(waypoints, waypoints[1:], strict=False):
+            for fraction in _NO_FLY_SAMPLE_FRACTIONS:
+                lon = from_wp.position.longitude + (
+                    to_wp.position.longitude - from_wp.position.longitude
+                ) * fraction
+                lat = from_wp.position.latitude + (
+                    to_wp.position.latitude - from_wp.position.latitude
+                ) * fraction
+                sample_point = GeoPoint(coordinates=(lon, lat))
+                for zone in no_fly_zones:
+                    if point_in_polygon(sample_point, zone.polygon):
+                        findings.append(
+                            ValidationFinding(
+                                severity=ValidationSeverity.BLOCKING,
+                                code="no_fly_trajectory_containment",
+                                message=(
+                                    f"mission {mission.id}'s trajectory between waypoints "
+                                    f"{from_wp.sequence_index} and {to_wp.sequence_index} enters "
+                                    f"no-fly zone {zone.id} ({zone.label or zone.id})"
+                                ),
+                                path=f"missions[{mission_index}].trajectory",
+                            )
+                        )
+                        break
+
+    return findings
+
+
 def validate_scenario_version(version: ScenarioVersion) -> list[ValidationFinding]:
     """Run cross-entity consistency checks over a ScenarioVersion.
 
@@ -102,6 +216,8 @@ def validate_scenario_version(version: ScenarioVersion) -> list[ValidationFindin
     individual models are not repeated here.
     """
     findings: list[ValidationFinding] = list(_coherent_group_findings(version))
+    findings.extend(_zone_reference_findings(version))
+    findings.extend(_no_fly_containment_findings(version))
 
     # No dangling-recording-reference check here: ScenarioVersion.recordings
     # is always derived from these same emissions
