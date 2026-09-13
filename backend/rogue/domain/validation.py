@@ -13,11 +13,12 @@ here, per CLAUDE.md rule 3.
 from __future__ import annotations
 
 from enum import StrEnum
+from itertools import combinations
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 from rogue.domain.common import GeoPoint, RogueModel
-from rogue.domain.geometry import point_in_polygon
+from rogue.domain.geometry import point_in_polygon, polygons_intersect
 from rogue.domain.mission import MissionTemplate
 from rogue.domain.mission_evaluator import orbit_period_seconds, zone_crossings
 from rogue.domain.receiver import ReceiverType
@@ -275,22 +276,32 @@ def _no_fly_containment_findings(version: ScenarioVersion) -> list[ValidationFin
 
 
 def _zone_trigger_overlap_findings(version: ScenarioVersion) -> list[ValidationFinding]:
-    """The two ``zone_trigger`` overlap cases staticaly provable without a
-    compile-time ``duration_s`` or a polygon-intersection primitive —
-    neither of which this module has (ADR-017; ``_resolvable_span_seconds``
-    already documents why zone_trigger emissions are otherwise skipped from
-    overlap detection entirely). Cross-zone geometric overlap between two
-    *different* zones, and overlap between a zone_trigger emission and a
-    manually-timed non-looping one, remain open — see ADR-017.
+    """``zone_trigger`` overlap cases checkable without a compile-time
+    ``duration_s`` (ADR-017/ADR-018; ``_resolvable_span_seconds`` already
+    documents why zone_trigger emissions are otherwise skipped from overlap
+    detection entirely). Overlap between a zone_trigger emission and a
+    manually-timed non-looping one is still out of scope — that needs a
+    time horizon this module doesn't have — see ADR-018.
 
     1. Two zone_trigger emissions on the same link referencing the same
-       ``zone_id`` activate/deactivate in lockstep, so they always overlap.
+       ``zone_id`` activate/deactivate in lockstep, so they always overlap
+       (BLOCKING — provably certain).
     2. A zone_trigger emission coexisting on a link with a ``loop=True``
        emission always overlaps it — a looping emission is active for the
-       entire scenario by definition (``_resolvable_span_seconds`` already
-       treats a loop as open-ended/always-active).
+       entire scenario by definition (BLOCKING — provably certain;
+       ``_resolvable_span_seconds`` already treats a loop as open-ended).
+    3. Two zone_trigger emissions on the same link referencing *different*
+       zones whose polygons overlap in space (``rogue.domain.geometry.
+       polygons_intersect``, ADR-018) — WARNING, not BLOCKING: unlike cases
+       1-2, this is a *possible* overlap, not a certain one. Whether the
+       emissions are ever simultaneously active depends on the mission's
+       actual trajectory, which this geometry-only check deliberately
+       doesn't evaluate (same shape as ``rogue.spectrum.occupancy``'s
+       ``spectral_overlap`` finding: advisory, since intentional/never-
+       actually-realized overlap is legal per CLAUDE.md rule 5).
     """
     findings: list[ValidationFinding] = []
+    zones_by_id = {zone.id: zone for zone in version.zones}
 
     for mission_index, mission in enumerate(version.missions):
         for link_index, link in enumerate(mission.rf_links):
@@ -334,6 +345,32 @@ def _zone_trigger_overlap_findings(version: ScenarioVersion) -> list[ValidationF
                     )
                 else:
                     seen_zone_ids[zone_id] = emission_index
+
+            for (i_index, i_emission), (j_index, j_emission) in combinations(zone_triggered, 2):
+                assert i_emission.zone_trigger is not None  # guaranteed by the filter above
+                assert j_emission.zone_trigger is not None
+                i_zone_id = i_emission.zone_trigger.zone_id
+                j_zone_id = j_emission.zone_trigger.zone_id
+                if i_zone_id == j_zone_id:
+                    continue  # already reported as zone_trigger_duplicate_zone above
+                i_zone = zones_by_id.get(i_zone_id)
+                j_zone = zones_by_id.get(j_zone_id)
+                if i_zone is None or j_zone is None:
+                    continue  # unresolvable reference is _zone_reference_findings's job
+                if polygons_intersect(i_zone.polygon, j_zone.polygon):
+                    findings.append(
+                        ValidationFinding(
+                            severity=ValidationSeverity.WARNING,
+                            code="zone_trigger_zones_may_overlap",
+                            message=(
+                                f"emissions {i_index} and {j_index} on this RfLink trigger on "
+                                f"zones {i_zone_id} and {j_zone_id}, whose polygons overlap in "
+                                "space — they may be simultaneously active depending on the "
+                                "mission's actual trajectory (not evaluated here)"
+                            ),
+                            path=f"{link_path}.emissions[{j_index}]",
+                        )
+                    )
 
     return findings
 

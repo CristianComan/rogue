@@ -57,6 +57,71 @@ def point_in_polygon(point: GeoPoint, polygon: GeoPolygon) -> bool:
     return inside
 
 
+def _orientation(
+    a: tuple[float, float], b: tuple[float, float], c: tuple[float, float]
+) -> float:
+    """Signed area of triangle a-b-c: >0 counter-clockwise, <0 clockwise, 0 collinear."""
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def _on_segment(a: tuple[float, float], b: tuple[float, float], p: tuple[float, float]) -> bool:
+    """Whether collinear point ``p`` lies within segment ``a``-``b``'s bounding box."""
+    return min(a[0], b[0]) <= p[0] <= max(a[0], b[0]) and min(a[1], b[1]) <= p[1] <= max(a[1], b[1])
+
+
+def _segments_intersect(
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    p3: tuple[float, float],
+    p4: tuple[float, float],
+) -> bool:
+    """Standard orientation-based segment intersection test, including the
+    collinear-overlap and touching-endpoint cases (both treated as
+    intersecting — the conservative choice for this module's use, flagging
+    a possible conflict rather than silently ruling one out).
+    """
+    o1, o2 = _orientation(p1, p2, p3), _orientation(p1, p2, p4)
+    o3, o4 = _orientation(p3, p4, p1), _orientation(p3, p4, p2)
+
+    if (o1 > 0) != (o2 > 0) and (o3 > 0) != (o4 > 0):
+        return True
+
+    if o1 == 0 and _on_segment(p1, p2, p3):
+        return True
+    if o2 == 0 and _on_segment(p1, p2, p4):
+        return True
+    if o3 == 0 and _on_segment(p3, p4, p1):
+        return True
+    return bool(o4 == 0 and _on_segment(p3, p4, p2))
+
+
+def polygons_intersect(a: GeoPolygon, b: GeoPolygon) -> bool:
+    """Whether ``a`` and ``b``'s exterior rings overlap (share any area or
+    boundary), including one polygon fully containing the other.
+
+    Same conventions as ``point_in_polygon``: exterior ring only (interior
+    rings/holes not modelled), planar (lon, lat) treatment rather than
+    geodesic — adequate at scenario-authoring scale, not a claim of
+    correctness for very large or pole-spanning polygons. Handles arbitrary
+    simple (non-self-intersecting) polygons, including concave ones: first
+    checks every edge pair for a crossing (which also catches partial
+    overlap and touching edges/vertices), then falls back to a single
+    vertex-in-polygon check each way to catch the case where one polygon
+    fully contains the other with no edges crossing at all.
+    """
+    ring_a = [(p[0], p[1]) for p in a.coordinates[0]]
+    ring_b = [(p[0], p[1]) for p in b.coordinates[0]]
+
+    for a1, a2 in zip(ring_a, ring_a[1:], strict=False):
+        for b1, b2 in zip(ring_b, ring_b[1:], strict=False):
+            if _segments_intersect(a1, a2, b1, b2):
+                return True
+
+    a_point = GeoPoint(coordinates=ring_a[0])
+    b_point = GeoPoint(coordinates=ring_b[0])
+    return point_in_polygon(a_point, b) or point_in_polygon(b_point, a)
+
+
 def horizontal_los_unit_vector(from_point: GeoPoint, to_point: GeoPoint) -> tuple[float, float]:
     """(east, north) unit vector of the horizontal line-of-sight bearing from ``from_point``
     to ``to_point`` — the local ENU frame ``Receiver.element_local_offset_m`` is expressed in.

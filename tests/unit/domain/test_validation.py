@@ -476,10 +476,12 @@ def test_zone_trigger_with_loop_emission_on_same_link_is_blocking() -> None:
 
 
 def test_zone_trigger_different_zones_without_loop_is_not_blocking() -> None:
-    # Two distinct zone_ids can't be proven to overlap without a
-    # polygon-intersection primitive this module doesn't have (ADR-017) —
-    # this stays out of scope, so no finding is expected here even though
-    # both zones happen to share the same default polygon.
+    # Two distinct zone_ids are never BLOCKING regardless of their
+    # geometry — at most a WARNING (zone_trigger_zones_may_overlap, see
+    # below) since ADR-018's polygon-intersection check is advisory, not a
+    # certainty (CLAUDE.md rule 5: overlap may be intentional/never
+    # actually realized). Both zones happen to share the same default
+    # polygon here, so the WARNING does fire — asserted explicitly.
     ref = recording_reference()
     zone_a = make_zone(zone_type=ZoneType.TRIGGER)
     zone_b = make_zone(zone_type=ZoneType.TRIGGER)
@@ -500,3 +502,72 @@ def test_zone_trigger_different_zones_without_loop_is_not_blocking() -> None:
     codes = {f.code for f in findings if f.severity == ValidationSeverity.BLOCKING}
     assert "zone_trigger_duplicate_zone" not in codes
     assert "zone_trigger_overlaps_loop" not in codes
+    warning_codes = {f.code for f in findings if f.severity == ValidationSeverity.WARNING}
+    assert "zone_trigger_zones_may_overlap" in warning_codes
+
+
+def test_zone_trigger_disjoint_zones_produce_no_overlap_warning() -> None:
+    ref = recording_reference()
+    zone_a = make_zone(
+        zone_type=ZoneType.TRIGGER,
+        polygon=GeoPolygon(
+            coordinates=[[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0)]]
+        ),
+    )
+    zone_b = make_zone(
+        zone_type=ZoneType.TRIGGER,
+        polygon=GeoPolygon(
+            coordinates=[[(5.0, 5.0), (6.0, 5.0), (6.0, 6.0), (5.0, 6.0), (5.0, 5.0)]]
+        ),
+    )
+    emissions = [
+        RfEmission(recording=ref, zone_trigger=ZoneTriggerPolicy(zone_id=zone_a.id)),
+        RfEmission(recording=ref, zone_trigger=ZoneTriggerPolicy(zone_id=zone_b.id)),
+    ]
+    link = DroneRfLink(**drone_rf_link_kwargs(recording=ref, emissions=emissions))
+    mission = DroneMission(**drone_mission_kwargs(recording=ref, rf_links=[link]))
+    version = ScenarioVersion(
+        **scenario_version_kwargs(
+            missions=[mission], recordings=[ref], zones=[zone_a, zone_b]
+        )
+    )
+
+    findings = validate_scenario_version(version)
+
+    codes = {f.code for f in findings}
+    assert "zone_trigger_zones_may_overlap" not in codes
+
+
+def test_zone_trigger_overlapping_zones_across_different_links_is_not_flagged() -> None:
+    # The overlap checks are scoped to a single RfLink (same rationale as
+    # overlapping_emissions/zone_trigger_duplicate_zone/
+    # zone_trigger_overlaps_loop): independent links may legitimately
+    # overlap in time (CLAUDE.md rule 5).
+    ref = recording_reference()
+    zone_a = make_zone(zone_type=ZoneType.TRIGGER)
+    zone_b = make_zone(zone_type=ZoneType.TRIGGER)
+    trigger_a = ZoneTriggerPolicy(zone_id=zone_a.id)
+    trigger_b = ZoneTriggerPolicy(zone_id=zone_b.id)
+    link_a = DroneRfLink(
+        **drone_rf_link_kwargs(
+            recording=ref,
+            emissions=[RfEmission(recording=ref, zone_trigger=trigger_a)],
+        )
+    )
+    link_b = DroneRfLink(
+        **drone_rf_link_kwargs(
+            recording=ref,
+            emissions=[RfEmission(recording=ref, zone_trigger=trigger_b)],
+        )
+    )
+    mission = DroneMission(**drone_mission_kwargs(recording=ref, rf_links=[link_a, link_b]))
+    version = ScenarioVersion(
+        **scenario_version_kwargs(
+            missions=[mission], recordings=[ref], zones=[zone_a, zone_b]
+        )
+    )
+
+    findings = validate_scenario_version(version)
+
+    codes = {f.code for f in findings}
+    assert "zone_trigger_zones_may_overlap" not in codes
