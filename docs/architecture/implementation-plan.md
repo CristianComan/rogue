@@ -6,27 +6,638 @@ Build ROGUE in bounded, testable increments. Do not begin with hardware-specific
 
 ## 2. Recommended sequence
 
-| Milestone | Deliverable | Exit criterion |
-|---|---|---|
-| M0 | Repository, architecture docs, CI, Compose, UI/API shell, simulated agent | one-command local environment and health tests |
-| M1 | Scenario domain model | typed/versioned scenario round-trip with tests |
-| M2 | Scenario persistence/API | draft/version/clone/validation APIs |
-| M3 | Map + trajectory editor | multi-drone scenario visual playback |
-| M4 | SigMF catalogue | validated immutable recording assets |
-| M5 | RF spectrum planner | deterministic spectrum state and conflict/headroom findings |
-| M6 | Replay Plan compiler | scenario compiles to hardware-neutral executable plan |
-| M7 | Simulated SDR execution | full prepare/arm/start/stop without hardware |
-| M8 | Distributed SDR Agent | leases, cache, protocol, watchdog, telemetry |
-| M9 | First real adapter | cabled/attenuated replay on one supported device |
-| M10 | X440 + AIR7311 capability-based scheduling | both hardware families behind common interface |
-| M11 | Multi-SDR synchronization | declared timing class demonstrated and measured |
-| M12 | Doppler/delay/phase processing | receiver-specific streams validated |
-| M13 | TDOA/AOA receiver stimulation | relative delay/phase requirements demonstrated |
-| M14 | Independent RF validation | measured RF evidence attached to run |
+| Milestone | Deliverable | Exit criterion | Status |
+|---|---|---|---|
+| M0 | Repository, architecture docs, CI, Compose, UI/API shell, simulated agent | one-command local environment and health tests | Done |
+| M1 | Scenario domain model | typed/versioned scenario round-trip with tests | Done — `backend/rogue/domain/`, merged to `develop` |
+| M2 | Scenario persistence/API | draft/version/clone/validation APIs | Done — `feature/scenario-persistence-api`, merged to `develop` |
+| M3 | Map + trajectory editor | multi-drone scenario visual playback | Done — `feature/map-trajectory-editor`, merged to `develop` |
+| M4 | SigMF catalogue | validated immutable recording assets | Done — `feature/sigmf-catalogue`, merged to `develop` |
+| M5 | RF spectrum planner | deterministic spectrum state and conflict/headroom findings | Done — `feature/rf-spectrum-planner`, merged to `develop` |
+| — | Recording schedule + spectrum waterfall | per-platform recording/background/silence scheduling, real spectrogram preview | Done — `feature/recording-schedule-waterfall`, merged to `develop` (supplemental; not in the original CLAUDE.md M-sequence, added by direct request) |
+| M6 | Replay Plan compiler | scenario compiles to hardware-neutral executable plan | Done — `feature/replay-plan-compile`, merged to `develop` |
+| M7 | Simulated SDR execution | full prepare/arm/start/stop without hardware | Done — `feature/simulate-sdr-execution`, merged to `develop` |
+| M8 | Distributed SDR Agent | leases, cache, protocol, watchdog, telemetry | Done — `feature/distributed-sdr-agent` |
+| M9 | First real adapter | cabled/attenuated replay on one supported device | Code complete, **hardware-unverified** — `feature/x440-real-adapter` (see ADR-009) |
+| M10 | X440 + AIR7311 capability-based scheduling | both hardware families behind common interface | **AIR7311 side hardware-verified 2026-09-08** (live discovery, `live-agent-registry` scheduling, and a full `reserve->prefetch->configure->arm->start->stop` cycle with real cabled/attenuated TX — see ADR-010, ADR-011); X440 side still **code complete, hardware-unverified** — `feature/air7311-and-capability-scheduling` |
+| M11 | Multi-SDR synchronization | declared timing class demonstrated and measured | L1 (software barrier) demonstrated and measured in simulation; L3/L4 declared but not achievable with current Agent capability — see ADR-012, ADR-013 |
+| M12 | Doppler/delay/phase processing | receiver-specific streams validated | Coherent-group Doppler-driven phase (continuous NCO) + piecewise delay applied during streaming, verified against a fake device seam — **hardware-unverified** — see ADR-012, ADR-013 |
+| M13 | TDOA/AOA receiver stimulation | relative delay/phase requirements demonstrated | Domain + compiler + execution-layer code complete (coherent-group allocation, Δφ/τ computation, streaming DSP application) — **hardware-unverified**, same constraint as M9/M10 — see ADR-012, ADR-013 |
+| M14 | Independent RF validation | measured RF evidence attached to run | Domain + pure comparison + simulated-monitor adapter + orchestration + API code complete — **hardware-unverified**, same constraint as M9/M10/M12/M13 — see ADR-014 |
+| M15 | Region and receiver simulation semantics | `NO_FLY` containment + `TRIGGER`-zone emission timing + receiver-observation reference are domain-modelled and validated | Domain model + reference-integrity validation + tests done — `feature/region-and-receiver-simulation-semantics`; compiler integration was follow-up work, done in M16 — see ADR-015 |
+| M16 | Zone-trigger compiler integration | `zone_trigger` emissions resolve to real `RfWindow`/`CompositeChannel` output; `observed_by_receiver_id` survives into `CompositeChannel` | Done — `feature/zone-trigger-compiler-integration` — see ADR-016 |
+| M17 | Zone-trigger overlap detection (partial) | The two statically-provable `zone_trigger` overlap cases are BLOCKING findings | Done — `feature/zone-trigger-overlap-detection`; cross-zone geometric overlap closed in M18, zone-trigger-vs-manually-timed overlap still open — see ADR-017 |
+| M18 | Zone polygon-overlap detection | Two zone_trigger emissions on the same link with spatially-overlapping zones produce a WARNING | Done — `feature/zone-polygon-overlap-detection`; zone-trigger-vs-manually-timed overlap still needs a validation-time duration_s, not attempted — see ADR-018 |
 
-## 3. First implementation feature
+## 3. Feature sequence
 
-Start with `feature/scenario-domain-model`. Implement typed models, validation, YAML/JSON serialization and schemas for Scenario, Timeline, Platform/Drone, Trajectory/Waypoint, RF links/emissions/frequency events, recording references, receivers and hardware resource constraints. Do not implement SDR control in this feature.
+### M1 — Scenario domain model (done)
+
+Implemented in `feature/scenario-domain-model` (merged to `develop`): typed models, validation,
+YAML/JSON serialization and schemas for Scenario, Timeline, Platform/Drone, Trajectory/Waypoint,
+RF links/emissions/frequency events, recording references, receivers and hardware resource
+constraints, under `backend/rogue/domain/` with tests in `tests/unit/domain/` and an example
+scenario at `examples/scenarios/single-drone-orbit.yaml`. `ScenarioRun`/Replay Plan were
+intentionally not modelled (M6+). SDR control was not implemented in this feature.
+
+### M2 — Scenario persistence/API (done)
+
+Implemented in `feature/scenario-persistence-api` (merged to `develop`). Persists
+`Scenario`/`ScenarioDraft`/`ScenarioVersion` (SQLAlchemy 2 + PostgreSQL/PostGIS, Alembic
+migrations) and exposes FastAPI endpoints for draft CRUD, publish (draft → immutable
+`ScenarioVersion`), clone, list/search and a validation endpoint wrapping
+`validate_scenario_version`. Reuses the M1 domain models as the request/response shape rather
+than forking a parallel schema. Did not implement the map/trajectory UI (M3) or SigMF ingest (M4).
+
+### M4 — SigMF catalogue (done)
+
+Branch `feature/sigmf-catalogue`, merged to `develop` via GitHub PR #3. Ingests a SigMF
+`.sigmf-meta`/`.sigmf-data` asset pair already uploaded to MinIO object storage: parses SigMF core
+metadata (`backend/rogue/catalogue/sigmf.py`, pure/no I/O), streams the data object from S3 in
+bounded chunks to compute its checksum/length (`backend/rogue/storage/object_store.py`), validates
+pairing/checksum/duration/metadata (`backend/rogue/catalogue/ingest.py`, reusing
+`rogue.domain.validation.ValidationFinding`), and persists the result as an immutable, versioned
+`IQRecording` row (`backend/rogue/persistence/catalogue.py`, JSONB-backed — no migration needed for
+later additive field changes) — mirroring M2's draft/validate/publish shape rather than forking a
+parallel persistence pattern. Exposes `POST /recordings` (ingest; `recording_id` omitted registers
+a new catalogue entry, given adds a new version to it), `GET /recordings` (latest version per
+entry, filterable), `GET /recordings/{id}`, `GET /recordings/{id}/versions[/{version}]`. Reuses
+M1's `IQRecording` domain model as-is (no new fields added to it in this milestone) and M2's
+`NotFoundError`/`ValidationRejectedError` so the existing exception handlers apply unchanged.
+Unknown/unmapped SigMF metadata (remaining `global` keys, `captures`, `annotations`, `collection`)
+is preserved verbatim in `extra_sigmf_fields` rather than dropped. Does not implement recording
+deprecation/retirement or a presigned-upload flow for getting bytes into MinIO in the first place;
+both are left as follow-ups. RF/spectrum planning (M5) and Replay Plan compilation (M6) were out
+of scope for this milestone.
+
+### M5 — RF spectrum planner (done)
+
+Branch `feature/rf-spectrum-planner`, merged to `develop`. Deterministic occupancy + conflict/
+headroom findings computed at an arbitrary scenario time from authored `DroneRfLink`/`RfEmission`
+data plus the M4 catalogue, in `backend/rogue/spectrum/occupancy.py` (pure) and exposed via
+`backend/rogue/api/spectrum.py`/`backend/rogue/persistence/spectrum.py`. Per CLAUDE.md rule 5,
+spectral overlap between different links is legal by default (advisory WARNING), while an occupied
+band that doesn't fit inside its own link's declared `RfBand` is BLOCKING. Also added recording-
+picker UI groundwork on the frontend (`RecordingPicker.tsx`, `api/recordings.ts`) reused by the
+next increment below. RF Environment Compiler / Replay Plan generation (M6) remains out of scope.
+
+### Recording schedule + spectrum waterfall (in progress, supplemental)
+
+Branch `feature/recording-schedule-waterfall`, based on `develop` after M5. Not part of the
+original CLAUDE.md M1–M14 sequence — added by direct request, sitting architecturally between M4
+and M5's dependencies (scenario domain model + catalogue) rather than blocking on M6+. Scope:
+
+- **Domain**: `IQRecording.kind` (`signal`/`background`, set at ingest — `backend/rogue/domain/recording.py`);
+  `RfEmission.recording` is now optional (`null` authors an explicit silence span, requiring
+  `duration_override` since there's no recording to derive a length from —
+  `backend/rogue/domain/rf.py`); a new `overlapping_emissions` BLOCKING validation finding for
+  emissions with resolvable (explicit-duration) spans that overlap in time
+  (`backend/rogue/domain/validation.py`).
+- **Spectrogram preview**: computed once at ingest as a coarse overview (fixed, small time-bin
+  count spanning the full `duration_s`), stored as an extra key in `IQRecordingORM.document`
+  (JSONB — no migration needed), rather than recomputed live per request. A first live-STFT-per-
+  request version was built and measured against realistic sample rates before this decision: a
+  20 Msps recording's 2-second scrub window alone decodes to ~640 MB, which is too expensive to
+  compute synchronously per request, especially with multiple Waterfall panels open during
+  playback — so the endpoint now slices/looks up the precomputed overview instead.
+  `storage/object_store.py:get_object_range` (bounded MinIO range-read) and
+  `catalogue/spectrogram.py:compute_spectrogram` (the STFT itself) are reused for the ingest-time
+  computation; only *when* they run changed. Frontend `components/timeline/Waterfall.tsx` renders
+  the result as a canvas heatmap, re-centered on the link's live authored frequency.
+- **Authoring UI**: `RfLinkForm.tsx` gained a "Silence" toggle per emission and a non-binding
+  "Resource preference" section (`ResourcePreference.preferred_agent_tags`/`required_sync_class`/
+  `notes` — already modelled in M1, never previously exposed in the UI). This is a preference only;
+  it does not bind a scenario to a specific SDR/device (CLAUDE.md rule 1, ADR-002). The properties
+  column also gained `MissionsListEditor`/`ReceiversListEditor`/`TimelineEventsListEditor` (mirroring
+  the existing `ZonesListEditor`) — previously a mission/receiver could only be selected by clicking
+  its map feature, and a timeline event (no geometry at all) had no way to be re-selected once
+  deselected.
+- **`ScenarioDraft`/`ScenarioVersion.recordings` is now always server-derived**, never
+  hand-authored. It used to be a flat list edited through a standalone `RecordingsListEditor` panel,
+  disconnected from where recordings are actually scheduled — `Mission -> RfLink -> RfEmission`
+  already carries that (with `start_offset`/`duration_override`/`loop`). Checking its only consumer
+  found it was `validate_scenario_version`'s `dangling_recording_reference` check, which verified
+  self-consistency against that same hand-authored list and nothing about the real catalogue — so it
+  came out too, as structurally unreachable once the list can no longer diverge from the emissions
+  that populate it. `derive_recording_references` (`backend/rogue/domain/scenario.py`) now builds it
+  by walking `missions[].rf_links[].emissions[]` at draft create/update time; `DraftContent`
+  (`api/schemas.py`) no longer accepts `recordings` as client input (422 if sent);
+  `RecordingsListEditor.tsx` is deleted. The field stays on the schema for backward
+  read-compatibility (`extra="forbid"` on `RogueModel` would otherwise break reading every existing
+  stored draft/version) and as a useful denormalized manifest. While fixing the e2e coverage for
+  this, also fixed a real pre-existing bug in `RecordingPicker.tsx`: selecting "Custom UUID…" reset
+  the value to `""`, which doesn't count as "custom" by the component's own check, so the text input
+  never appeared.
+- **ADR-005** (`docs/decisions/ADR-005-sdr-adapter-library-choice.md`) records a related but
+  separate decision reached while scoping this work: SDR adapters stay split by vendor library
+  (native UHD for X440, native SoapySDR for AIR7311) rather than unified via SoapyUHD, and
+  `SoapyRemote` stays diagnostics-only, never the production access path. No adapter code was
+  written — that's still M9/M10, per CLAUDE.md's explicit sequencing rule.
+
+Backend (172 tests) and frontend (118 tests) both green as of this increment, plus a 3-test
+Playwright e2e suite covering create→validate→save→publish, overlapping-emissions publish
+rejection, and 409 stale-revision conflicts. A real "does this recording exist in the catalogue"
+validation still doesn't exist (the retired check never actually verified that either) — flagged as
+a natural follow-up, not bundled into this pass.
+
+### M6 — Replay Plan compiler (done)
+
+Branch `feature/replay-plan-compile`, based on `develop` after the
+recording-schedule/waterfall supplemental. New `backend/rogue/compiler/`
+package (mirroring `backend/rogue/spectrum/`'s pure-function-then-
+persistence-wrapper shape): `frequency.py` realizes SCRIPTED/
+PROBABILISTIC_ADAPTIVE frequency-agility over a full compile horizon
+(reusing a small extraction from M5's `spectrum/occupancy.py` —
+`probabilistic_dwell_segments` — so the seeded-RNG dwell math has one
+implementation, not two); `windows.py` packs co-occurring occupied bands
+(via M5's `compute_spectrum_state`, evaluated at every occupancy-changing
+instant) into `RfWindow`/`CompositeChannel` spans; `allocation.py` assigns
+each window span to a physical TX channel from a `HardwareCapabilityProfile`
+(stable-preferring, first-fit); `compile.py` orchestrates all three into an
+immutable `ReplayPlan`. See ADR-006 for the exact packing/allocation
+algorithm and its limits, and `models.py`'s `DEFAULT_CAPABILITY_PROFILE`
+for the illustrative 24-channel default (CLAUDE.md section 4).
+
+"Hardware-neutral" per this milestone's exit criterion means the compiler
+takes `HardwareCapabilityProfile` as a compile-time input (defaulting to
+the illustrative profile above) rather than runtime-discovered hardware —
+real capability readback is M8/M10, per CLAUDE.md rule 10 and the
+explicit M1-M14 sequencing. `Receiver` geometry, Doppler/delay/phase and
+aggregate peak/RMS/intermodulation assessment are correspondingly out of
+scope (M12-M14); `SafetyPolicyOutcome.tx_authorized` is a structural
+`False` placeholder (rule 12) — the full lease/policy engine is M8.
+
+Persisted the same way as M2/M4's immutable artifacts: a new `replay_plans`
+JSONB-document table (migration `8c4f3a1e6b2d`, since a new table needs one,
+unlike M4/M5's additive-JSONB-field changes), `rogue.persistence.replay`
+mirroring `rogue.persistence.spectrum`'s "resolve inputs, call the pure
+function" shape but persisting on success (`repository.
+CompilationRejectedError` mirrors `ValidationRejectedError` when the plan
+has BLOCKING findings — nothing is persisted in that case). API:
+`POST /scenarios/{id}/versions/{n}/compile` (idempotency-key-wrapped, 201),
+`GET .../replay-plans`, `GET .../replay-plans/{id}` — compiles a
+*published* `ScenarioVersion`, not a draft, keeping the compiler's input
+immutable (rule 11).
+
+Backend test suite grew from 172 to 207 tests: pure-function tests under
+`tests/unit/compiler/` (frequency realization, window packing, channel
+allocation, end-to-end compile determinism), a DB-backed
+`tests/unit/persistence/test_replay.py`, and an HTTP-level
+`tests/unit/api/test_replay_compiler.py` (named to avoid a pytest module-
+name collision with the persistence test file, matching M5's
+`test_spectrum.py`/`test_spectrum_planner.py` precedent). A real "does the
+scenario have an explicit total duration" concept still doesn't exist
+(mission timing is M3's unfinished job) — the compile endpoint takes an
+explicit `duration_s` horizon instead, the same shape as M5's `at_seconds`
+single-instant query, generalized to a span.
+
+### M7 — Simulated SDR execution (done)
+
+Branch `feature/simulate-sdr-execution`, based on `develop` after M6. New
+domain model `backend/rogue/domain/run.py` (`ScenarioRun`, `RunStatus`,
+`DeviceLease`, `RunEvent`/`RunEventKind`) and a new `backend/rogue/
+execution/` package: `adapter.py` defines the vendor-neutral `SDRAdapter`
+Protocol (sdr-architecture.md section 2) plus `MockSDRAdapter`, a
+first-class simulated implementation with per-channel state, a small
+simulated transfer delay, and an injectable `fail_on` hook so tests can
+force a specific `(device_id, channel_index, method)` call to raise
+`SimulatedDeviceFailureError`; `orchestrator.py` is the pure, DB-free
+prepare/arm/start/stop/emergency-stop state machine (mirrors `compiler/
+compile.py` vs `persistence/replay.py`'s split). See ADR-007 for the exact
+scope decisions and their rationale — in-process only (no NATS, no
+separate Agent process; that's M8), one earliest-allocation configuration
+per physical channel, real prefetch/hash-verification against the
+catalogue, and emergency-stop as an always-reachable, always-succeeding
+path from any `RunStatus` including `failed`.
+
+Persisted like M2's `ScenarioDraftORM` (mutable JSONB document, not M6's
+insert-only pattern): a new `scenario_runs` table (migration
+`1e17dd5b4902`), `rogue.persistence.run` doing read-current-document →
+call the matching pure `orchestrator` function → write the updated
+document back, against a single process-wide `MockSDRAdapter` instance.
+API: `POST /scenarios/{id}/replay-plans/{plan_id}/runs` (create+prepare,
+idempotency-key-wrapped, 201), `POST .../runs/{run_id}/{arm,start,stop}`
+(also idempotency-key-wrapped, 200), `POST .../runs/{run_id}/emergency-stop`
+(no idempotency key — always accepted, never blocked), `GET .../runs/
+{run_id}`, `GET .../runs`. `InvalidRunTransitionError` (wrong-status
+lifecycle call) maps to HTTP 409.
+
+Backend test suite grew from 207 to 254 tests: `tests/unit/domain/
+test_run.py`, `tests/unit/execution/{test_adapter,test_orchestrator}.py`
+(pure, including dedicated emergency-stop-from-armed/running/failed tests
+per CLAUDE.md section 10), `tests/unit/persistence/test_run_execution.py`
+(named to avoid a pytest module-name collision with the domain test file,
+matching M6's `test_replay_compiler.py` precedent), and `tests/unit/api/
+test_runs.py`. Manually verified end-to-end against a live server: compile
+a plan, walk create→arm→start→stop via curl with `GET .../runs/{id}`
+confirming a strictly growing event list at each step, and a separate
+emergency-stop mid-`running` reaching `emergency_stopped`.
+
+### M8 — Distributed SDR Agent (done)
+
+Branch `feature/distributed-sdr-agent`, based on `develop` after M7. See
+ADR-008 for the full scope/exclusions record; summary below.
+
+New `backend/rogue/protocol/` package (`messages.py`, `subjects.py`): versioned
+`AgentCommand`/`AgentAck`/`AgentPresence`/`AgentTelemetry`/`RecordingCacheEntry`
+NATS message shapes, each carrying `schema_version`/correlation ID/sequence/
+timestamp per `sdr-architecture.md` §4 — reuses `AdapterDeviceStatus` and
+`DeviceLease` rather than redefining them. Lives under `backend/rogue`, not a
+new top-level `schemas/` package, since the Agent image already installs the
+full `rogue` package.
+
+`DeviceLease` gained `expires_at`; `SDRAdapter.reserve` takes a `ttl_seconds`
+and a new `SDRAdapter.renew` extends it. `rogue.execution.orchestrator` gained
+`renew_leases` and a new `AdapterOperationError` base that
+`SimulatedDeviceFailureError` now inherits from, so a remote Agent's
+`AgentUnreachableError` (`rogue.execution.remote_adapter`) fails a run through
+the exact same existing per-step exception handling — no new orchestrator
+branches needed for a second `SDRAdapter` implementation.
+
+`rogue.execution.remote_adapter.RemoteAgentAdapter` implements `SDRAdapter`
+over NATS request-reply to a device's owning Agent (looked up via a new
+presence-driven registry, `rogue.persistence.agents` / `rogue.domain.agent.
+SDRAgentRecord`, exposed as `GET /agents`/`GET /agents/{agent_id}`).
+`rogue.persistence.run` picks between an in-process `MockSDRAdapter` (default,
+what every unit test exercises unchanged) and this remote adapter via
+`settings.agent_dispatch_mode` (`ROGUE_AGENT_DISPATCH_MODE`) — a deployment-
+topology setting, not a version fork.
+
+Central lease enforcement (`rogue.execution.lease_sweep`, started from a new
+FastAPI lifespan in `rogue.execution.lifespan`) renews every ARMED/RUNNING
+run's leases on a short interval and emergency-stops one whose lease lapsed
+or failed to renew — CLAUDE.md rule 12's *central* half. `agents/common/
+agent.py`'s new `AgentRuntime` is the *local* half: an independent watchdog
+that emergency-stops its own adapter if a channel stays armed/transmitting
+past a timeout with no control-plane contact, regardless of whether the
+control plane itself is reachable. `agents/common/cache.py` gives each Agent
+a real local SigMF cache — downloads and hash-verifies `.sigmf-meta`/
+`.sigmf-data` from MinIO during `PREFLIGHT` via a new `rogue.storage.
+object_store.stream_object_to_file` (bounded, disk-streaming — the existing
+`get_object_bytes` must not be used for a large `.sigmf-data` object).
+`SDRAdapter.preflight` gained a `recordings` parameter (the plan's full
+`recording_manifest`, resolved to `IQRecording`s) to carry this through; the
+compiled `ReplayPlan` has no finer per-channel recording linkage than that
+today (a compiler-side gap noted as a follow-up, not fabricated here).
+
+docker-compose.yml now runs **two** simulated Agent instances
+(`simulated-agent-1`/`simulated-agent-2`, `ROGUE_AGENT_DEVICE_IDS` giving each
+a disjoint device slice) instead of one, so the device_id→agent_id registry
+routing is actually exercised end-to-end rather than always resolving to the
+only agent that exists; `api` sets `ROGUE_AGENT_DISPATCH_MODE=distributed`.
+
+Also fixed, while building this: `POST .../runs/{id}/emergency-stop`
+(`rogue.api.runs`) never called `session.commit()`, unlike every other
+mutating run endpoint — under a real pooled connection (not the test
+fixtures' shared-transaction setup, which masked it) the emergency-stop
+status change would roll back when the connection returned to the pool and
+never actually persist. Found because M8's lease-sweep calls this same
+function and depends on it durably persisting.
+
+Backend test suite grew from 254 to 288 tests: `tests/unit/protocol/`,
+`tests/unit/agents/` (new — `AgentRuntime` dispatch/watchdog/cache, no
+`__init__.py`, matching this repo's per-directory pytest import convention),
+extensions to `tests/unit/execution/test_{adapter,orchestrator}.py`, a new
+`tests/unit/execution/test_remote_adapter.py` (fake NATS transport, no real
+broker — matches CLAUDE.md §10's simulation default), a `@pytest.mark.nats`
+integration test (`test_distributed_integration.py`, skips itself if no
+broker is reachable) that proves the wire format round-trips over a real
+NATS connection, `tests/unit/persistence/test_agent_registry.py` and
+`test_lease_sweep.py`, and `tests/unit/api/test_agents.py`. Manually verified
+against the full `docker compose up` stack: compiled a plan, walked
+create→arm→start→running with the lease-sweep visibly renewing over real
+NATS round trips, then killed the owning `simulated-agent-1` container
+mid-`RUNNING` and confirmed the central sweep reached `EMERGENCY_STOPPED`
+(recording the agent-unreachable errors, since the physical stop command
+itself couldn't be delivered to a dead process — exactly the scenario the
+Agent-side local watchdog exists to cover independently).
+
+Explicitly out of scope (ADR-008): real vendor adapters (unchanged, M9/M10),
+timing sync beyond L1, persisted telemetry history, NATS auth/TLS, and a
+live per-request device-discovery endpoint beyond the presence-driven
+registry.
+
+### M9 — First real adapter (code complete, hardware-unverified)
+
+Branch `feature/x440-real-adapter`, based on `feature/distributed-sdr-agent`
+after M8. See ADR-009 for the full scope record — summary below.
+
+**This environment has no UHD/SoapySDR packages and no physical hardware
+attached**, so unlike every prior milestone this one's exit criterion
+(actual cabled/attenuated replay) was *not* met here. What was built and
+verified in software: `agents/common/x440_adapter.py`'s `EttusX440Adapter`
+implements `SDRAdapter` against a small `UHDDevice` seam (the real
+`import uhd` is isolated in one lazily-called function,
+`_open_real_uhd_device`, so the rest of the Agent process — including
+`simulated` mode — never needs `uhd` installed); a real-TX safety gate
+(`settings.enable_real_tx`/`ROGUE_ENABLE_REAL_TX`) refuses to key the
+transmitter unless explicitly set; `agents/common/agent.py`'s
+`AgentRuntime` now actually uses `mode` to pick `MockSDRAdapter` vs
+`EttusX440Adapter` (previously `mode` only reached the presence heartbeat
+label). `uhd` is a new optional dependency
+(`pip install .[x440]`), not part of the base install.
+
+While scoping this, found and fixed a real gap: the compiled `ReplayPlan`
+had no per-channel link to which recording plays where —
+`OccupiedBand`/`CompositeChannel` only carried `emission_id`. Added
+`recording: RecordingReference` to both
+(`rogue/spectrum/models.py`/`rogue/compiler/models.py`), populated at the
+one place each is constructed
+(`rogue/spectrum/occupancy.py`/`rogue/compiler/windows.py`) where the
+resolved reference was already available but previously discarded. This
+also tightened M8's behaviour: `rogue.execution.orchestrator.prepare_run`
+now sends each channel's `PREFLIGHT` only the recording(s) it actually
+needs, not the whole plan's manifest.
+
+Scope for this pass (ADR-009): one X440, exactly one recording per
+physical channel (a shared/composite window needing real baseband mixing
+is rejected, not silently mis-transmitted), `cf32_le` only, no artificial
+looping, no precise `end_seconds` alignment (needs L3/L4 timed commands),
+fixed default gain. `DeepwaveAIR7311Adapter` is unaffected — still M10.
+
+Backend test suite grew from 289 to 301 tests: `tests/unit/agents/
+test_x440_adapter.py` (fake `UHDDevice` — configure/arm/start/stop/
+emergency-stop sequencing, the real-TX gate refusing then allowing start,
+bounded-chunk streaming, discover() readback, single-recording/
+single-format rejection), `AgentRuntime` mode-selection tests, and compiler/
+orchestrator tests for the new per-channel recording linkage. `ruff`/
+`mypy` both pass with `uhd` absent, confirming the lazy-import boundary.
+`docs/testing/manual-verification-guide.md` gained an M9 section — written
+for the user to run on real lab hardware, explicitly not something this
+session confirmed.
+
+### M10 — X440 + AIR7311 capability-based scheduling (code complete, hardware-unverified)
+
+Branch `feature/air7311-and-capability-scheduling`, based on
+`feature/x440-real-adapter` after M9. See ADR-010 for the full scope
+record — summary below.
+
+**Same environment constraint as M9: no SoapySDR bindings and no AIR7311
+hardware here**, so this milestone's exit criterion (both families
+demonstrated on real hardware) was not met in this session either.
+
+`agents/common/air7311_adapter.py`'s `DeepwaveAIR7311Adapter` implements
+`SDRAdapter` against native SoapySDR (per ADR-005). Rather than duplicate
+M9's adapter, the vendor-agnostic logic (lease bookkeeping, the real-TX
+safety gate, bounded-chunk streaming) was extracted from
+`EttusX440Adapter` into a new shared
+`agents/common/sdr_adapter_base.StreamingSDRAdapter`; both adapters are now
+thin subclasses supplying only their vendor-specific device-opening
+function. Unlike `uhd`, SoapySDR has no reliable pip-installable package,
+so no `pyproject.toml` extra was added for it — provisioning is documented
+in the manual-verification-guide instead, matching `deployment.md` §7's
+already-flagged bare-metal-driver-provisioning gap. `AgentRuntime` gained
+an `"air7311"` mode.
+
+Separately, closed a real gap in "capability-based scheduling": M6's
+allocator already picks physical channels by capability
+(tunable-range/bandwidth checks), but it only ever scheduled against the
+static `DEFAULT_CAPABILITY_PROFILE` — never the live capabilities M8's
+agent registry already collects. New
+`rogue.persistence.agents.aggregate_capability_profile` builds a
+`HardwareCapabilityProfile` spanning every currently-online agent of
+either family; `rogue.persistence.replay.compile_and_store_replay_plan`
+now uses it by default when at least one agent is online, falling back to
+the static default only when none is — making CLAUDE.md rule 10's "static
+profiles are defaults only" actually true. Existing tests are unaffected
+(they compile against an empty agent registry, so the fallback preserves
+prior behaviour exactly — verified, not just asserted).
+
+Backend test suite grew from 301 to 317 tests:
+`tests/unit/agents/test_air7311_adapter.py` (mirrors M9's X440 test shape
+against a fake `SoapyDevice`), an `AgentRuntime` mode-selection test,
+`aggregate_capability_profile` tests (empty registry, all-stale, spans two
+families, excludes a stale agent), and `compile_and_store_replay_plan`
+tests proving the live-vs-static distinction by device_id. `ruff`/`mypy`
+pass with neither `uhd` nor `SoapySDR` installed.
+`docs/testing/manual-verification-guide.md` gained an M10 section for the
+user's lab.
+
+### M11/M12/M13 — coherent-group allocation, synchronized start, continuous Doppler DSP
+
+Two branches, both based on `develop` after M10: `feature/coherent-group-allocation`
+(the domain + compiler slice, ADR-012 — `Receiver.array_group_id` wired all the way
+through to compiled `RfWindow`/`Allocation` with computed per-element Δφ/τ, atomic
+group allocation) and `feature/multi-sdr-sync-and-doppler-dsp` (the execution-layer
+slice, ADR-013 — everything ADR-012 explicitly deferred). See both ADRs for the full
+scope record; summary below.
+
+**This environment has no PPS/PTP-capable hardware and no AIR7311/X440 units
+attached, and neither real adapter exposes such a capability in code today** — so
+unlike a genuine M11 exit criterion of "any declared timing class," what's demonstrated
+here is L1 (software barrier), which needs no such hardware at all. `ReplayPlan`
+gained `required_sync_class` (compiler-aggregated, strictest requested wins, defaults
+to L0 so every existing plan/test is unaffected); `rogue.execution.orchestrator.
+start_run` issues an L1+ plan's channels concurrently against one shared future
+timestamp (`asyncio.gather`, never the original sequential loop) and measures the
+achieved skew via a new `RunEventKind.SYNC_MEASURED` event, reading each channel's
+`AdapterDeviceStatus.actual_tx_start_at`. A real correctness finding drove the
+implementation shape: `agents/common/agent.py`'s command loop handles one NATS message
+at a time, so a barrier-scheduled `start()` must return once *scheduled*, not once it
+*fires* — otherwise a second channel on the same Agent would desynchronize badly. Every
+`SDRAdapter.start()` implementation was changed to a fire-and-forget background-task
+pattern accordingly, with failures surfaced via a new `AdapterDeviceStatus.last_error`
+rather than raised (the caller has already returned by the time a barrier-scheduled
+failure can occur).
+
+`rogue.compiler.coherent_groups.compute_doppler_schedule` samples a coherent-group
+element's Doppler shift across a window's whole span (not just its start, unlike
+ADR-012's piecewise phase/delay) using the same `evaluate_mission_position` position
+evaluator; `agents/common/dsp.py` (new, pure) applies it during real streaming as a
+phase-continuous NCO (`PhaseAccumulatorNCO`, CLAUDE.md rule 9) plus a fractional-sample
+delay line, wired into `StreamingSDRAdapter._stream` only for channels that actually
+carry coherent-group fields — every non-coherent scenario (the large majority) is
+unaffected. While rebuilding that streaming path, ADR-009's original one-recording-
+per-physical-channel restriction was also relaxed to N-way mixing (one stream per
+`RfWindow` composite channel, independently gain-scaled and summed) — the domain model
+(`RfWindow.channels`, ADR-003) had supported this since M6; only the real adapters had
+never been extended to exercise it.
+
+Backend test suite grew by 60+ tests across `tests/unit/domain/`,
+`tests/unit/compiler/` (`test_coherent_groups.py`, `test_windows.py`,
+`test_compile.py`), `tests/unit/execution/` (`test_adapter.py`,
+`test_orchestrator.py`), `tests/unit/protocol/`, and a new `tests/unit/agents/
+test_dsp.py` (pure signal-processing tests against synthetic tones/ramps — an
+FFT-verified Doppler shift, a cross-checked fractional delay, NCO phase continuity
+across chunk boundaries — no hardware or mocks needed, matching CLAUDE.md §8).
+`ruff`/`mypy` pass with neither `uhd` nor `SoapySDR` installed. Manually verified
+against the full `docker compose up` stack (2 simulated Agents already configured):
+compiled a coherent-group scenario with an `l1_software_barrier` link, walked
+prepare→arm→start, and confirmed a `sync_measured` event with sub-100ms skew.
+
+### M14 — Independent RF validation (domain + comparison + simulated monitor + orchestration + API)
+
+Branch `feature/independent-rf-validation`, based on `develop` after M11/M12/M13. See
+ADR-014 for the full scope record — summary below.
+
+**This environment has no spectrum analyzer or RX-SDR capture hardware**, so — matching
+M9/M10/M12/M13's exact constraint — the milestone's real exit criterion (measured RF
+evidence from an actual independent capture) is not met here. What was built and
+verified in software: a new `rogue.validation` package, architecturally independent of
+`rogue.execution` (CLAUDE.md rule 15) — `monitor_adapter.RfMonitorAdapter` is a distinct
+`Protocol` from `SDRAdapter`, with `MockRfMonitorAdapter` as its first-class simulated
+implementation (`sdr-architecture.md` §8's "not a throwaway mock" precedent, applied to
+the capture side). `compare.py` is a pure comparison function (frequency, bandwidth,
+timing, delay, phase, underrun) against the compiled `ReplayPlan`, reusing
+`rogue.domain.validation.ValidationSeverity`. `orchestrator.run_validation` captures
+every relevant `Receiver` at one explicit `at_seconds` instant — `MONITOR` receivers
+against every active `RfWindow`, `TDOA`/`AOA_DOA` receivers against their specific
+compiled `CompositeChannel`(s) — and appends the result to a new, additive
+`ScenarioRun.validation_reports` field (append-only, JSONB-compatible, no migration) plus
+a new `RunEventKind.VALIDATION_RECORDED` event.
+
+`rogue.persistence.run.record_validation` fetches the run/plan/scenario-version
+receivers and calls the orchestrator against a `_MONITOR_ADAPTER` singleton — a separate
+module-level singleton from the existing `_ADAPTER`, deliberately, so no state is shared
+between the TX and validation paths. New endpoint: `POST /scenarios/{id}/replay-plans/
+{plan_id}/runs/{run_id}/validate` (body `{"at_seconds": float}`, idempotency-key-wrapped
+like arm/start/stop); no new GET endpoint, since `GET .../runs/{run_id}` already returns
+the whole `ScenarioRun`.
+
+Backend test suite grew by 35 tests (395 -> 430): `tests/unit/domain/
+test_rf_validation.py`, `tests/unit/validation/` (`test_compare.py`,
+`test_monitor_adapter.py`, `test_validation_orchestrator.py` — named to avoid a pytest
+module-name collision with `tests/unit/execution/test_orchestrator.py`, matching M6's
+`test_replay_compiler.py` precedent), `tests/unit/persistence/
+test_run_validation_persistence.py` (DB-backed, same naming-collision precedent against
+`tests/unit/api/test_run_validation.py`), and `tests/unit/api/test_run_validation.py`.
+`ruff`/`mypy` both pass. No frontend changes (matches M11-M13's backend-only precedent);
+`validation_reports` is already visible through the existing run-fetch response for a
+future UI to consume.
+
+### M15 — Region and receiver simulation semantics (domain + validation)
+
+Branch `feature/region-and-receiver-simulation-semantics`, based on `develop` after M14.
+See ADR-015 for the full scope record — summary below.
+
+Two domain-model gaps closed: a mission's trajectory can now be checked against `NO_FLY`
+zones, and an `RfEmission` can derive its active span from entering/leaving a
+`TRIGGER`-typed `Zone` instead of an authored `start_offset`/`duration_override`.
+`rogue.domain.geometry.point_in_polygon` adds a planar ray-casting containment test
+against `GeoPolygon`'s exterior ring; `rogue.domain.mission_evaluator.zone_crossings`
+samples `evaluate_mission_position` at ~1s cadence (mirroring
+`compute_doppler_schedule`'s sampling precedent) to report the sub-intervals a mission is
+inside a zone, serving both the `NO_FLY` containment check and `TRIGGER`-zone emission
+timing from one primitive. `RfEmission.zone_trigger: ZoneTriggerPolicy | None` and
+`DroneRfLink.observed_by_receiver_id: UUID | None` are both new, additive, `None`-default
+fields; reference integrity for both (resolving to a `TRIGGER` zone / `MONITOR` receiver
+in the same `ScenarioVersion`) is a new pair of BLOCKING findings in
+`rogue.domain.validation.validate_scenario_version`, alongside a new BLOCKING `NO_FLY`
+trajectory-containment check (five-fraction-per-leg sampling — a documented approximation,
+not exact segment/polygon intersection).
+
+**Compiler integration was explicitly not built here** — see M16 below for that follow-up.
+
+Backend domain test suite grew by 30 tests (93 -> 123): `tests/unit/domain/
+test_geometry.py`, `test_mission_evaluator.py`, `test_rf.py` and `test_validation.py`.
+`ruff`/`mypy` both pass. No API, compiler or frontend changes.
+
+An ultra code review against this branch found three real bugs in the first version of
+the `NO_FLY` containment check: `ORBIT` missions sampled the wrong geometry (the raw
+waypoint chord, not the actual circular path — `_orbit_no_fly_findings` now samples via
+`zone_crossings`/`orbit_period_seconds` instead), a naive-longitude antimeridian bug
+producing false positives across the date line (fixed by `_antimeridian_aware_lerp`), and
+a loop-scoping bug producing one duplicate finding per sample fraction instead of one per
+violation. All three fixed and covered by new regression tests before merge — see
+ADR-015.
+
+### M16 — Zone-trigger compiler integration
+
+Branch `feature/zone-trigger-compiler-integration`, based on `develop` after M15. See
+ADR-016 for the full scope record — summary below.
+
+Closes M15's explicitly deferred gap: `DroneRfLink.observed_by_receiver_id` is now a
+straight passthrough field on `rogue.spectrum.models.OccupiedBand` and
+`rogue.compiler.models.CompositeChannel`, set in `compute_spectrum_state` and copied
+through by `compute_rf_windows` — no new geometry needed, it's already fully resolved on
+the link. `RfEmission.zone_trigger` resolution is split into two costs: a cheap O(1)
+point-in-time query (`point_in_polygon` + one `evaluate_mission_position` call) in
+`rogue.spectrum.occupancy.active_emission_at`, asked once per boundary instant, versus a
+one-time whole-horizon interval scan (the existing `mission_evaluator.zone_crossings`) in
+`rogue.compiler.windows._boundary_seconds` to discover which instants matter at all —
+calling the expensive scan from the point-query path would have been correct but
+wasteful. `active_emission_at` gained two new required parameters (`mission`,
+`zones_by_id`); this is a public-function signature break contained entirely to
+`rogue.spectrum.occupancy` and its own test file (one production call site, in the same
+module, updated alongside it).
+
+A zone-triggered emission on a mission `evaluate_mission_position` can't evaluate
+(unsupported template, or `ON_EVENT`/`MANUAL` start policy) degrades to "never active"
+plus a BLOCKING `zone_trigger_position_unresolvable` finding — default-deny per CLAUDE.md
+rule 12, mirroring `rogue.compiler.coherent_groups.expand_occupied_bands`'s exact
+precedent for the same class of error, rather than crashing the compile or transmitting
+unconditionally.
+
+Backend test suite grew by 13 tests: `tests/unit/spectrum/test_occupancy.py` (+9:
+zone-trigger point-query on/off/unresolvable-zone cases, `observed_by_receiver_id`
+passthrough, the unsupported-template BLOCKING-finding case) and `tests/unit/compiler/
+test_windows.py` (+4: a zone-triggered emission produces an `RfWindow` gated to its
+actual crossing interval rather than the full compile horizon, the same
+unsupported-template case surfacing through the compiler, that same case with a delayed
+`AT_TIME_OFFSET` mission start, `observed_by_receiver_id` surviving into
+`CompositeChannel`). `ruff`/`mypy` both pass. No API or frontend changes.
+
+An ultra code review against this branch found that `_boundary_seconds`'s original
+"the real BLOCKING finding is already guaranteed to surface... at t=0" claim was false:
+for a mission with a delayed `AT_TIME_OFFSET` start, `evaluate_mission_position`'s
+"before start" early return covers every boundary that survives when zone-trigger
+boundaries are the only interesting ones, so an unsupported-template error was never
+actually reached — silently producing no window and no finding. Fixed by having
+`_boundary_seconds` report the finding itself (now returns `tuple[list[float],
+list[CompilerFinding]]`) rather than relying on a later stage to happen to hit the same
+error. The review's other two findings (a pre-existing window-coalescing gap that drops
+channel data when two emissions share a frequency/bandwidth, and `zone_trigger`/
+`observed_by_receiver_id`'s reliance on `validate_scenario_version` having already run)
+were verified and left as-is — the former reproduces identically on `develop` before this
+branch, the latter mirrors `array_group_id`'s own existing precedent and is safe because
+`publish_draft` already refuses to publish anything with BLOCKING findings. See ADR-016.
+
+### M17 — Zone-trigger overlap detection (partial)
+
+Branch `feature/zone-trigger-overlap-detection`, based on `develop` after M16. See
+ADR-017 for the full scope record — summary below.
+
+Closes the statically-provable half of the gap ADR-016 flagged: `validate_scenario_
+version` has no `duration_s` and the codebase has no polygon-intersection primitive, so
+the general case (two *different* zones whose polygons overlap in space, or a
+zone-triggered emission against a manually-timed non-looping one) stays out of scope.
+What's cheaply provable without either: two `zone_trigger` emissions on the same link
+referencing the *same* `zone_id` (`zone_trigger_duplicate_zone`, BLOCKING — they
+activate in lockstep by construction), and a `zone_trigger` emission coexisting on a link
+with a `loop=True` emission (`zone_trigger_overlaps_loop`, BLOCKING — a loop is active
+for the whole scenario by definition). Both are simple set/flag checks in
+`rogue.domain.validation._zone_trigger_overlap_findings`, no geometry or mission
+evaluation needed.
+
+Backend domain test suite grew by 3 tests (126 total in `tests/unit/domain`):
+duplicate-zone BLOCKING, zone-trigger-vs-loop BLOCKING, and a negative case (two
+different zone_ids sharing an identical polygon, no loop — confirming the narrow scope
+holds even when the geometry would coincidentally overlap). `ruff`/`mypy` both pass. No
+API, compiler or frontend changes.
+
+### M18 — Zone polygon-overlap detection
+
+Branch `feature/zone-polygon-overlap-detection`, based on `develop` after M17. See
+ADR-018 for the full scope record — summary below.
+
+Closes the geometric half of what M17 left open: `rogue.domain.geometry.
+polygons_intersect` is a new primitive (standard edge-pair orientation test plus a
+vertex-in-polygon fallback for full containment, same planar/exterior-ring-only
+conventions as `point_in_polygon`), and `_zone_trigger_overlap_findings` now flags two
+zone-triggered emissions on the same link whose *different* zones spatially overlap.
+Unlike M17's two checks, this is a WARNING (`zone_trigger_zones_may_overlap`), not
+BLOCKING — a spatial overlap only means the emissions *might* coincide in time, depending
+on the mission's actual trajectory, which this geometry-only check doesn't evaluate
+(same shape as `rogue.spectrum.occupancy`'s `spectral_overlap`: advisory, since CLAUDE.md
+rule 5 makes overlap legal by default). The zone-trigger-vs-manually-timed-emission
+overlap case is still open — that's a time-domain question a polygon primitive can't
+answer; it still needs a `duration_s` threaded through `validate_scenario_version`.
+
+Backend domain test suite grew by 9 tests: `test_geometry.py` (+7:
+`polygons_intersect`'s disjoint/partial-overlap/full-containment-both-directions/
+identical/edge-touching/vertex-touching/3D-coordinate cases) and `test_validation.py`
+(+2, plus corrected assertions on one existing test whose comment predated this
+primitive). `ruff`/`mypy` both pass. No API, compiler or frontend changes.
 
 ## 4. Git workflow
 

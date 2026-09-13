@@ -40,6 +40,9 @@ Editable working representation with optimistic concurrency. Publishing creates 
 ### ScenarioVersion
 Immutable, schema-versioned scenario document including missions, RF intent, receivers, timeline, validation result, author and change note.
 
+### Zone
+Named area polygon: `OPERATIONAL_AREA`, `NO_TRANSMIT`, `NO_FLY`, `RESTRICTED`, `TRIGGER` or `CUSTOM`. `NO_FLY` zones are a hard mission-geometry constraint (§6). `TRIGGER` zones drive an `RfEmission`'s active span (see `RfEmission` below) rather than being an authored/visual-only annotation.
+
 ### DroneMission
 Platform, mission type, geometry, altitude/speed profiles, start policy, behaviour parameters and RF links.
 
@@ -60,10 +63,10 @@ GeoJSON geometry plus timing/kinematic constraints. Canonical mission state is e
 Immutable SigMF asset/version reference with metadata/data object locations, SHA-256, sample format/rate/count, duration, provenance, access classification and allowed use/frequency constraints. Unknown SigMF extension fields are retained.
 
 ### DroneRfLink
-Logical RF relationship owned by a platform/mission, such as C2, telemetry or video/data. Defines band plan, allowed frequencies/ranges, switching policy and associated emissions/recordings.
+Logical RF relationship owned by a platform/mission, such as C2, telemetry or video/data. Defines band plan, allowed frequencies/ranges, switching policy and associated emissions/recordings. May optionally name one `MONITOR` `Receiver` as the link's `observed_by_receiver_id` — purely informational (planning/display), independent of `array_group_id`'s TDOA/AOA_DOA coherent-group allocation (see ADR-015).
 
 ### RfEmission
-A logical emitted waveform with recording mapping and per-emission processing parameters. It is not a physical TX channel.
+A logical emitted waveform with recording mapping and per-emission processing parameters. It is not a physical TX channel. Its active span is normally authored explicitly (`start_offset`/`duration_override`), but may instead be derived from a `TRIGGER`-typed `Zone`: the emission is active for exactly the sub-intervals its mission's trajectory is inside that zone's polygon, mutually exclusive with the authored-timing fields (see ADR-015).
 
 ### FrequencyBehaviour / FrequencyEvent
 Defines time-varying frequency behaviour and realized changes. Supports scripted, mission/position-triggered, deterministic probabilistic/adaptive, and approved external/state-triggered switching. Random seeds and realized choices are recorded for repeatability.
@@ -104,6 +107,28 @@ Domain validation covers schema/references, geometry, mission timing/kinematics,
 
 Intentional RF overlap must not be rejected by the domain schema.
 
+A mission's trajectory must never enter a `NO_FLY` zone (BLOCKING, checked at publish/plan-time, sampled along each waypoint-to-waypoint leg). An `RfEmission.zone_trigger.zone_id` must resolve to a `TRIGGER`-typed `Zone`, and a `DroneRfLink.observed_by_receiver_id` must resolve to a `MONITOR`-typed `Receiver`, both within the same `ScenarioVersion` (BLOCKING) — see ADR-015. Two `zone_trigger` emissions on the same `DroneRfLink` referencing the same zone, or coexisting with a looping emission, always overlap (BLOCKING) — see ADR-017. Two `zone_trigger` emissions on the same link referencing different but spatially-overlapping zones may overlap (WARNING, advisory only) — see ADR-018; overlap against a manually-timed emission remains open, needing a time horizon this module doesn't have.
+
 ## 7. Portable scenario representation
 
 Use versioned JSON with GeoJSON geometry and stable recording references. Physical SDR/channel assignments are not canonical scenario content. Optional resource preferences/constraints may be expressed, but actual allocations are stored only in the run manifest.
+
+## 8. Implementation status
+
+M1 implemented this document as typed Pydantic v2 models in `backend/rogue/domain/`, with tests
+in `tests/unit/domain/` and an example scenario at `examples/scenarios/single-drone-orbit.yaml`.
+Notable implementation choices, not otherwise specified above:
+
+- GeoJSON `Point`/`LineString`/`Polygon` are minimal hand-rolled types (`backend/rogue/domain/common.py`)
+  rather than an external GeoJSON library, to avoid an added dependency for a shape this narrow.
+- `Trajectory` treats authored `Waypoint`s as canonical; GeoJSON `LineString` export is a derived
+  helper, not duplicated storage.
+- `ResourcePreference` (band-plan sync-class/agent-tag hints only, no device/serial/channel field)
+  is the concrete shape of the "optional resource preferences" mentioned above.
+- `SDRAgent`/`SDRDevice`/`PhysicalTxChannel` and `ScenarioRun` (including `RunManifest`/`ReplayPlan`)
+  are runtime/execution concerns and are deliberately not modelled by M1; they belong to M6+ per
+  `docs/architecture/implementation-plan.md`.
+- Region simulation semantics (`Zone.TRIGGER`, `RfEmission.zone_trigger`, the `NO_FLY`
+  containment check) and receiver-observation semantics (`DroneRfLink.observed_by_receiver_id`)
+  were added after M14, on top of the stable M1 model — see ADR-015 and
+  `docs/architecture/implementation-plan.md` M15.

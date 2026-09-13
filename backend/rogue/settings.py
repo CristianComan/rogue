@@ -1,0 +1,63 @@
+"""Runtime configuration for the ROGUE control-plane API.
+
+Values are sourced from environment variables (see docker-compose.yml,
+which sets the ROGUE_* variables consumed here).
+"""
+
+from __future__ import annotations
+
+from typing import Annotated, Literal
+
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Process-wide settings, loaded once at import time."""
+
+    model_config = SettingsConfigDict(env_prefix="ROGUE_", extra="ignore")
+
+    database_url: str = "postgresql+psycopg://rogue:rogue_dev_only@localhost:5432/rogue"
+    nats_url: str = "nats://localhost:4222"
+    s3_endpoint: str = "http://localhost:9000"
+    s3_bucket: str = "rogue"
+    s3_access_key: str = "rogue"
+    s3_secret_key: str = "rogue_dev_password"
+    # M3's Vite dev server origin. Comma-separated for other environments,
+    # e.g. ROGUE_CORS_ALLOWED_ORIGINS="http://localhost:5173,https://lab.example".
+    # NoDecode: pydantic-settings otherwise tries to JSON-decode a list[str]
+    # env var *before* any field validator runs, which fails outright on the
+    # plain comma-separated string this field's own docstring documents (and
+    # docker-compose.yml's api service actually sets) — this crashed api on
+    # every `docker compose up` until caught here.
+    cors_allowed_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173"]
+    # "in_process" (default) is what every unit test exercises: rogue.persistence.run
+    # talks to a single in-process MockSDRAdapter, unchanged since M7. docker-compose's
+    # api service sets this to "distributed" to dispatch over NATS to a real, separate
+    # Agent process instead (ADR-008) — a deployment-topology setting, not a
+    # backwards-compatibility shim (CLAUDE.md §9).
+    agent_dispatch_mode: Literal["in_process", "distributed"] = "in_process"
+    # Real-TX safety gate (CLAUDE.md §10, M9/ADR-009): read by the Agent
+    # process itself, not the control plane — each Agent host gates its own
+    # hardware locally. EttusX440Adapter.start() refuses to key the
+    # transmitter unless this is explicitly True.
+    enable_real_tx: bool = False
+    # UHD device address string for the one X440 an x440-mode Agent host
+    # targets (e.g. "addr=192.168.10.2").
+    x440_device_args: str | None = None
+    # SoapySDR device args string for the one AIR7311 an air7311-mode
+    # Agent host targets (M10, ADR-010) — a real Deepwave AIR-T unit's
+    # SoapySDR driver identifies itself as "driver=SoapyAIRT" (confirmed via
+    # `SoapySDRUtil --find` against physical hardware, see ADR-010's
+    # addendum), not a generic/vendor-neutral string.
+    air7311_device_args: str | None = None
+
+    @field_validator("cors_allowed_origins", mode="before")
+    @classmethod
+    def _split_comma_separated(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
+
+
+settings = Settings()

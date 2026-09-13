@@ -65,6 +65,11 @@ services:
       ROGUE_S3_BUCKET: ${MINIO_BUCKET:-rogue}
       ROGUE_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-rogue}
       ROGUE_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-rogue_dev_password}
+      ROGUE_CORS_ALLOWED_ORIGINS: http://localhost:${ROGUE_UI_PORT:-5173}
+      # Dispatches over NATS to the real, separate simulated-agent-* processes
+      # below instead of an in-process MockSDRAdapter (M8, ADR-008). Every
+      # unit test still exercises "in_process" (the default) unchanged.
+      ROGUE_AGENT_DISPATCH_MODE: distributed
     ports:
       - "${ROGUE_API_PORT:-8000}:8000"
     depends_on:
@@ -75,7 +80,38 @@ services:
       minio-init:
         condition: service_completed_successfully
 
-  simulated-agent:
+  tiles:
+    image: maptiler/tileserver-gl:latest
+    command: ["--file", "/data/berlin.mbtiles"]
+    volumes:
+      - ./map-tiles:/data:ro
+    ports:
+      - "${ROGUE_TILES_PORT:-8081}:8080"
+
+  ui:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    environment:
+      VITE_API_BASE_URL: http://localhost:${ROGUE_API_PORT:-8000}
+      # Self-hosted basemap (scripts/build_map_tiles.sh + the `tiles`
+      # service above) — like VITE_API_BASE_URL, this is read by the Vite
+      # dev server but shipped into client-side JS that runs in the
+      # operator's browser on the host, so it must be the host-published
+      # port (localhost:8081), not the tiles service's in-network address.
+      VITE_MAP_STYLE_URL: http://localhost:${ROGUE_TILES_PORT:-8081}/styles/basic-preview/style.json
+    ports:
+      - "${ROGUE_UI_PORT:-5173}:5173"
+    depends_on:
+      - api
+      - tiles
+
+  # Two instances, each owning a disjoint slice of DEFAULT_CAPABILITY_PROFILE's
+  # device_ids (M8, ADR-008) — pairs one simulated X440 with one simulated
+  # AIR7311 per "agent host", and means the control plane's device_id->
+  # agent_id registry lookup actually has to pick between two real answers
+  # instead of always resolving to the only agent that exists.
+  simulated-agent-1:
     build:
       context: .
       dockerfile: agents/Dockerfile
@@ -83,9 +119,35 @@ services:
       ROGUE_NATS_URL: nats://nats:4222
       ROGUE_AGENT_ID: sim-agent-01
       ROGUE_AGENT_MODE: simulated
+      ROGUE_AGENT_DEVICE_IDS: x440-1,air7311-1
+      ROGUE_S3_ENDPOINT: http://minio:9000
+      ROGUE_S3_BUCKET: ${MINIO_BUCKET:-rogue}
+      ROGUE_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-rogue}
+      ROGUE_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-rogue_dev_password}
     depends_on:
       nats:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
+  simulated-agent-2:
+    build:
+      context: .
+      dockerfile: agents/Dockerfile
+    environment:
+      ROGUE_NATS_URL: nats://nats:4222
+      ROGUE_AGENT_ID: sim-agent-02
+      ROGUE_AGENT_MODE: simulated
+      ROGUE_AGENT_DEVICE_IDS: x440-2,air7311-2
+      ROGUE_S3_ENDPOINT: http://minio:9000
+      ROGUE_S3_BUCKET: ${MINIO_BUCKET:-rogue}
+      ROGUE_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-rogue}
+      ROGUE_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-rogue_dev_password}
+    depends_on:
+      nats:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
 
 volumes:
   postgres-data:
