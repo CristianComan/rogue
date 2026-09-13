@@ -26,7 +26,8 @@ Build ROGUE in bounded, testable increments. Do not begin with hardware-specific
 | M14 | Independent RF validation | measured RF evidence attached to run | Domain + pure comparison + simulated-monitor adapter + orchestration + API code complete — **hardware-unverified**, same constraint as M9/M10/M12/M13 — see ADR-014 |
 | M15 | Region and receiver simulation semantics | `NO_FLY` containment + `TRIGGER`-zone emission timing + receiver-observation reference are domain-modelled and validated | Domain model + reference-integrity validation + tests done — `feature/region-and-receiver-simulation-semantics`; compiler integration was follow-up work, done in M16 — see ADR-015 |
 | M16 | Zone-trigger compiler integration | `zone_trigger` emissions resolve to real `RfWindow`/`CompositeChannel` output; `observed_by_receiver_id` survives into `CompositeChannel` | Done — `feature/zone-trigger-compiler-integration` — see ADR-016 |
-| M17 | Zone-trigger overlap detection (partial) | The two statically-provable `zone_trigger` overlap cases are BLOCKING findings | Done — `feature/zone-trigger-overlap-detection`; cross-zone geometric overlap and zone-trigger-vs-manually-timed overlap remain open, need a polygon-intersection primitive or a validation-time duration_s — see ADR-017 |
+| M17 | Zone-trigger overlap detection (partial) | The two statically-provable `zone_trigger` overlap cases are BLOCKING findings | Done — `feature/zone-trigger-overlap-detection`; cross-zone geometric overlap closed in M18, zone-trigger-vs-manually-timed overlap still open — see ADR-017 |
+| M18 | Zone polygon-overlap detection | Two zone_trigger emissions on the same link with spatially-overlapping zones produce a WARNING | Done — `feature/zone-polygon-overlap-detection`; zone-trigger-vs-manually-timed overlap still needs a validation-time duration_s, not attempted — see ADR-018 |
 
 ## 3. Feature sequence
 
@@ -613,6 +614,30 @@ duplicate-zone BLOCKING, zone-trigger-vs-loop BLOCKING, and a negative case (two
 different zone_ids sharing an identical polygon, no loop — confirming the narrow scope
 holds even when the geometry would coincidentally overlap). `ruff`/`mypy` both pass. No
 API, compiler or frontend changes.
+
+### M18 — Zone polygon-overlap detection
+
+Branch `feature/zone-polygon-overlap-detection`, based on `develop` after M17. See
+ADR-018 for the full scope record — summary below.
+
+Closes the geometric half of what M17 left open: `rogue.domain.geometry.
+polygons_intersect` is a new primitive (standard edge-pair orientation test plus a
+vertex-in-polygon fallback for full containment, same planar/exterior-ring-only
+conventions as `point_in_polygon`), and `_zone_trigger_overlap_findings` now flags two
+zone-triggered emissions on the same link whose *different* zones spatially overlap.
+Unlike M17's two checks, this is a WARNING (`zone_trigger_zones_may_overlap`), not
+BLOCKING — a spatial overlap only means the emissions *might* coincide in time, depending
+on the mission's actual trajectory, which this geometry-only check doesn't evaluate
+(same shape as `rogue.spectrum.occupancy`'s `spectral_overlap`: advisory, since CLAUDE.md
+rule 5 makes overlap legal by default). The zone-trigger-vs-manually-timed-emission
+overlap case is still open — that's a time-domain question a polygon primitive can't
+answer; it still needs a `duration_s` threaded through `validate_scenario_version`.
+
+Backend domain test suite grew by 9 tests: `test_geometry.py` (+7:
+`polygons_intersect`'s disjoint/partial-overlap/full-containment-both-directions/
+identical/edge-touching/vertex-touching/3D-coordinate cases) and `test_validation.py`
+(+2, plus corrected assertions on one existing test whose comment predated this
+primitive). `ruff`/`mypy` both pass. No API, compiler or frontend changes.
 
 ## 4. Git workflow
 

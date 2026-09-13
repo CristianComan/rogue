@@ -13,6 +13,7 @@ from rogue.domain.geometry import (
     haversine_distance_m,
     horizontal_los_unit_vector,
     point_in_polygon,
+    polygons_intersect,
 )
 
 
@@ -55,6 +56,56 @@ def test_point_in_polygon_handles_3d_ring_coordinates() -> None:
     )
     assert point_in_polygon(point(0.5, 0.5), square_3d) is True
     assert point_in_polygon(point(2.0, 2.0), square_3d) is False
+
+
+def square(x0: float, y0: float, x1: float, y1: float) -> GeoPolygon:
+    return GeoPolygon(coordinates=[[(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]])
+
+
+def test_polygons_intersect_false_for_disjoint_squares() -> None:
+    assert polygons_intersect(square(0, 0, 1, 1), square(2, 2, 3, 3)) is False
+
+
+def test_polygons_intersect_true_for_partial_overlap() -> None:
+    assert polygons_intersect(square(0, 0, 2, 2), square(1, 1, 3, 3)) is True
+
+
+def test_polygons_intersect_true_when_one_fully_contains_the_other() -> None:
+    outer, inner = square(0, 0, 10, 10), square(2, 2, 3, 3)
+    assert polygons_intersect(outer, inner) is True
+    assert polygons_intersect(inner, outer) is True
+
+
+def test_polygons_intersect_true_for_identical_polygons() -> None:
+    assert polygons_intersect(SQUARE, SQUARE) is True
+
+
+def test_polygons_intersect_true_when_sharing_an_edge() -> None:
+    assert polygons_intersect(square(0, 0, 1, 1), square(1, 0, 2, 1)) is True
+
+
+def test_polygons_intersect_true_when_sharing_only_a_vertex() -> None:
+    assert polygons_intersect(square(0, 0, 1, 1), square(1, 1, 2, 2)) is True
+
+
+def test_polygons_intersect_handles_3d_ring_coordinates() -> None:
+    a = GeoPolygon(
+        coordinates=[
+            [(0.0, 0.0, 5.0), (1.0, 0.0, 5.0), (1.0, 1.0, 5.0), (0.0, 1.0, 5.0), (0.0, 0.0, 5.0)]
+        ]
+    )
+    b = GeoPolygon(
+        coordinates=[
+            [
+                (0.5, 0.5, 10.0),
+                (1.5, 0.5, 10.0),
+                (1.5, 1.5, 10.0),
+                (0.5, 1.5, 10.0),
+                (0.5, 0.5, 10.0),
+            ]
+        ]
+    )
+    assert polygons_intersect(a, b) is True
 
 
 def test_haversine_distance_to_self_is_zero() -> None:
