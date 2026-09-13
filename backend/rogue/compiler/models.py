@@ -84,6 +84,12 @@ class CompositeChannel(FrozenRogueModel):
     gain_offset_db: float
     recording: RecordingReference
 
+    # The owning link's DroneRfLink.observed_by_receiver_id (region/receiver
+    # simulation semantics, ADR-015), threaded through unchanged from the
+    # matching OccupiedBand — purely informational for a future planning
+    # sync matrix / run channel display, never affecting allocation.
+    observed_by_receiver_id: UUID | None = None
+
     # Coherent-group fields (ADR-012), carried through from the matching
     # OccupiedBand by rogue.compiler.windows's expansion step. None for an
     # ordinary (non-coherent) channel. phase_offset_rad is set only for

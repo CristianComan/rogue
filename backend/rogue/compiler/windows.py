@@ -31,6 +31,7 @@ from rogue.compiler.models import (
     HardwareCapabilityProfile,
     RfWindow,
 )
+from rogue.domain.mission_evaluator import zone_crossings
 from rogue.domain.recording import IQRecording
 from rogue.domain.scenario import ScenarioVersion
 from rogue.domain.validation import ValidationSeverity
@@ -42,15 +43,68 @@ DEFAULT_GUARD_MARGIN_HZ = 100_000.0
 
 def _boundary_seconds(
     version: ScenarioVersion, recordings: Mapping[RecordingKey, IQRecording], duration_s: float
-) -> list[float]:
-    """Every instant within [0, duration_s) where occupancy can change."""
+) -> tuple[list[float], list[CompilerFinding]]:
+    """Every instant within [0, duration_s) where occupancy can change.
+
+    A ``zone_trigger`` emission (ADR-015) has no ``start_offset``/
+    ``duration_override`` to read (both fixed at their defaults by
+    ``RfEmission``'s own mutual-exclusion validator) — its on/off instants
+    come from ``mission_evaluator.zone_crossings`` scanning the whole
+    ``[0, duration_s)`` horizon instead, one call per zone-triggered
+    emission. An unresolvable ``zone_trigger.zone_id`` contributes no
+    boundaries (reference integrity is ``validate_scenario_version``'s job,
+    not this function's — same precedent as ``array_group_id``).
+
+    A mission ``zone_crossings`` can't evaluate (unsupported template or
+    start policy) is different: this function *must* report a BLOCKING
+    finding here directly, rather than counting on ``compute_spectrum_state``
+    to hit the same error at whatever boundaries do get evaluated — for a
+    mission whose ``AT_TIME_OFFSET`` start falls after every boundary this
+    function does discover (e.g. only ``{0.0, duration_s}`` survive),
+    ``evaluate_mission_position`` never actually reaches the unsupported-
+    template branch at either of those instants (both fall in its "before
+    start" early return), so the error would otherwise never surface at
+    all — silently producing no window and no finding, exactly the "quiet
+    failure" CLAUDE.md rule 12's default-deny is meant to prevent.
+    """
     boundaries = {0.0, duration_s}
-    for mission in version.missions:
-        for link in mission.rf_links:
+    findings: list[CompilerFinding] = []
+    zones_by_id = {zone.id: zone for zone in version.zones}
+    for mission_index, mission in enumerate(version.missions):
+        for link_index, link in enumerate(mission.rf_links):
             for event in realize_frequency_timeline(link, duration_s):
                 if 0.0 <= event.at_seconds < duration_s:
                     boundaries.add(event.at_seconds)
-            for emission in link.emissions:
+            for emission_index, emission in enumerate(link.emissions):
+                if emission.zone_trigger is not None:
+                    zone = zones_by_id.get(emission.zone_trigger.zone_id)
+                    if zone is None:
+                        continue
+                    try:
+                        crossings = zone_crossings(mission, zone.polygon, 0.0, duration_s)
+                    except NotImplementedError as exc:
+                        findings.append(
+                            CompilerFinding(
+                                severity=ValidationSeverity.BLOCKING,
+                                code="zone_trigger_position_unresolvable",
+                                message=(
+                                    "cannot evaluate zone_trigger emission timing over "
+                                    f"[0, {duration_s}s): {exc}"
+                                ),
+                                path=(
+                                    f"missions[{mission_index}].rf_links[{link_index}]"
+                                    f".emissions[{emission_index}].zone_trigger"
+                                ),
+                            )
+                        )
+                        continue
+                    for interval_start, interval_end in crossings:
+                        if 0.0 <= interval_start < duration_s:
+                            boundaries.add(interval_start)
+                        if 0.0 < interval_end < duration_s:
+                            boundaries.add(interval_end)
+                    continue
+
                 start = emission.start_offset.total_seconds()
                 if 0.0 <= start < duration_s:
                     boundaries.add(start)
@@ -66,7 +120,7 @@ def _boundary_seconds(
                     end = start + recording.duration_s
                 if 0.0 < end < duration_s:
                     boundaries.add(end)
-    return sorted(boundaries)
+    return sorted(boundaries), findings
 
 
 def _pack_bands(
@@ -199,8 +253,7 @@ def compute_rf_windows(
     capability_profile: HardwareCapabilityProfile,
 ) -> tuple[list[RfWindow], list[CompilerFinding]]:
     """Compute the RF window schedule over [0, duration_s)."""
-    findings: list[CompilerFinding] = []
-    boundaries = _boundary_seconds(version, recordings, duration_s)
+    boundaries, findings = _boundary_seconds(version, recordings, duration_s)
 
     open_windows: dict[str, RfWindow] = {}
     closed_windows: list[RfWindow] = []
@@ -235,6 +288,7 @@ def compute_rf_windows(
                     bandwidth_hz=b.bandwidth_hz,
                     gain_offset_db=0.0,
                     recording=b.recording,
+                    observed_by_receiver_id=b.observed_by_receiver_id,
                     coherent_group_id=b.coherent_group_id,
                     array_element_receiver_id=b.array_element_receiver_id,
                     phase_offset_rad=b.phase_offset_rad,

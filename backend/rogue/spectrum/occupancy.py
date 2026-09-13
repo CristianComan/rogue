@@ -41,9 +41,12 @@ from itertools import combinations
 from math import log
 from uuid import UUID
 
+from rogue.domain.geometry import point_in_polygon
+from rogue.domain.mission import DroneMission
+from rogue.domain.mission_evaluator import evaluate_mission_position
 from rogue.domain.recording import IQRecording
 from rogue.domain.rf import DroneRfLink, FrequencySwitchingMode, RfEmission
-from rogue.domain.scenario import ScenarioVersion
+from rogue.domain.scenario import ScenarioVersion, Zone
 from rogue.domain.validation import ValidationSeverity
 from rogue.spectrum.models import FrequencyResolution, OccupiedBand, SpectrumFinding, SpectrumState
 
@@ -139,7 +142,11 @@ def resolve_frequency_hz(link: DroneRfLink, at_seconds: float) -> FrequencyResol
 
 
 def active_emission_at(
-    link: DroneRfLink, at_seconds: float, recordings: Mapping[RecordingKey, IQRecording]
+    mission: DroneMission,
+    link: DroneRfLink,
+    at_seconds: float,
+    recordings: Mapping[RecordingKey, IQRecording],
+    zones_by_id: Mapping[UUID, Zone],
 ) -> RfEmission | None:
     """The emission (if any) actively transmitting on ``link`` at ``at_seconds``.
 
@@ -151,8 +158,33 @@ def active_emission_at(
     started rather than silently treated as idle — the caller
     (``compute_spectrum_state``) still surfaces the missing recording as a
     ``recording_unavailable`` finding when it tries to compute bandwidth.
+
+    A ``zone_trigger`` emission (region simulation semantics, ADR-015)
+    bypasses ``start_offset``/``duration_override`` entirely (both are fixed
+    at their defaults by ``RfEmission``'s own mutual-exclusion validator):
+    it's active exactly when ``mission``'s position at ``at_seconds`` is
+    inside the referenced zone's polygon. This is a cheap point-in-time
+    query (``point_in_polygon`` + one ``evaluate_mission_position`` call) —
+    deliberately not ``mission_evaluator.zone_crossings``, which scans a
+    whole time window and would be wasted work called once per instant here;
+    ``zone_crossings`` is reserved for ``rogue.compiler.windows``'s one-time
+    boundary-discovery pass. An unresolvable ``zone_trigger.zone_id`` is
+    treated as never active — reference integrity is
+    ``rogue.domain.validation.validate_scenario_version``'s job, not this
+    function's. Propagates ``NotImplementedError`` from
+    ``evaluate_mission_position`` unchanged (unsupported mission template or
+    start policy) — the caller decides how to report that.
     """
     for emission in link.emissions:
+        if emission.zone_trigger is not None:
+            zone = zones_by_id.get(emission.zone_trigger.zone_id)
+            if zone is None:
+                continue
+            position = evaluate_mission_position(mission, at_seconds)
+            if point_in_polygon(position, zone.polygon):
+                return emission
+            continue
+
         start = emission.start_offset.total_seconds()
         if at_seconds < start:
             continue
@@ -196,12 +228,27 @@ def compute_spectrum_state(
     """
     occupied_bands: list[OccupiedBand] = []
     findings: list[SpectrumFinding] = []
+    zones_by_id = {zone.id: zone for zone in version.zones}
 
     for mission_index, mission in enumerate(version.missions):
         for link_index, link in enumerate(mission.rf_links):
             path = f"missions[{mission_index}].rf_links[{link_index}]"
 
-            emission = active_emission_at(link, at_seconds, recordings)
+            try:
+                emission = active_emission_at(mission, link, at_seconds, recordings, zones_by_id)
+            except NotImplementedError as exc:
+                findings.append(
+                    SpectrumFinding(
+                        severity=ValidationSeverity.BLOCKING,
+                        code="zone_trigger_position_unresolvable",
+                        message=(
+                            f"cannot evaluate zone_trigger emission timing at t={at_seconds}s: "
+                            f"{exc}"
+                        ),
+                        path=path,
+                    )
+                )
+                continue
             if emission is None:
                 continue
             if emission.recording is None:
@@ -258,6 +305,7 @@ def compute_spectrum_state(
                     freq_max_hz=freq_max,
                     headroom_hz=_headroom_hz(link, bandwidth),
                     recording=emission.recording,
+                    observed_by_receiver_id=link.observed_by_receiver_id,
                 )
             )
 

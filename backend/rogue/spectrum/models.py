@@ -52,6 +52,14 @@ class OccupiedBand(FrozenRogueModel):
     headroom_hz: float
     recording: RecordingReference
 
+    # The owning link's DroneRfLink.observed_by_receiver_id (region/receiver
+    # simulation semantics, ADR-015) — a straight passthrough, unlike the
+    # coherent-group fields below: it's already fully resolved on the link
+    # itself, no expansion/geometry step needed. Carried through to M6's
+    # CompositeChannel the same way `recording` is, for a future planning
+    # sync matrix / run channel display.
+    observed_by_receiver_id: UUID | None = None
+
     # Coherent-group fields (ADR-012): always None as produced by
     # compute_spectrum_state below — M5 has no receiver-geometry awareness.
     # Populated only by rogue.compiler.windows's coherent-group expansion
