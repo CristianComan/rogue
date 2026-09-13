@@ -274,6 +274,70 @@ def _no_fly_containment_findings(version: ScenarioVersion) -> list[ValidationFin
     return findings
 
 
+def _zone_trigger_overlap_findings(version: ScenarioVersion) -> list[ValidationFinding]:
+    """The two ``zone_trigger`` overlap cases staticaly provable without a
+    compile-time ``duration_s`` or a polygon-intersection primitive —
+    neither of which this module has (ADR-017; ``_resolvable_span_seconds``
+    already documents why zone_trigger emissions are otherwise skipped from
+    overlap detection entirely). Cross-zone geometric overlap between two
+    *different* zones, and overlap between a zone_trigger emission and a
+    manually-timed non-looping one, remain open — see ADR-017.
+
+    1. Two zone_trigger emissions on the same link referencing the same
+       ``zone_id`` activate/deactivate in lockstep, so they always overlap.
+    2. A zone_trigger emission coexisting on a link with a ``loop=True``
+       emission always overlaps it — a looping emission is active for the
+       entire scenario by definition (``_resolvable_span_seconds`` already
+       treats a loop as open-ended/always-active).
+    """
+    findings: list[ValidationFinding] = []
+
+    for mission_index, mission in enumerate(version.missions):
+        for link_index, link in enumerate(mission.rf_links):
+            link_path = f"missions[{mission_index}].rf_links[{link_index}]"
+            zone_triggered = [
+                (i, e) for i, e in enumerate(link.emissions) if e.zone_trigger is not None
+            ]
+            has_loop = any(e.loop for e in link.emissions)
+
+            if has_loop:
+                for emission_index, _emission in zone_triggered:
+                    findings.append(
+                        ValidationFinding(
+                            severity=ValidationSeverity.BLOCKING,
+                            code="zone_trigger_overlaps_loop",
+                            message=(
+                                f"emission {emission_index}'s zone_trigger always overlaps "
+                                "this RfLink's looping emission, which is active for the "
+                                "entire scenario"
+                            ),
+                            path=f"{link_path}.emissions[{emission_index}]",
+                        )
+                    )
+
+            seen_zone_ids: dict[UUID, int] = {}
+            for emission_index, emission in zone_triggered:
+                assert emission.zone_trigger is not None  # guaranteed by the filter above
+                zone_id = emission.zone_trigger.zone_id
+                prev_index = seen_zone_ids.get(zone_id)
+                if prev_index is not None:
+                    findings.append(
+                        ValidationFinding(
+                            severity=ValidationSeverity.BLOCKING,
+                            code="zone_trigger_duplicate_zone",
+                            message=(
+                                f"emissions {prev_index} and {emission_index} on this RfLink "
+                                f"both trigger on zone {zone_id} and always overlap"
+                            ),
+                            path=f"{link_path}.emissions[{emission_index}]",
+                        )
+                    )
+                else:
+                    seen_zone_ids[zone_id] = emission_index
+
+    return findings
+
+
 def validate_scenario_version(version: ScenarioVersion) -> list[ValidationFinding]:
     """Run cross-entity consistency checks over a ScenarioVersion.
 
@@ -283,6 +347,7 @@ def validate_scenario_version(version: ScenarioVersion) -> list[ValidationFindin
     findings: list[ValidationFinding] = list(_coherent_group_findings(version))
     findings.extend(_zone_reference_findings(version))
     findings.extend(_no_fly_containment_findings(version))
+    findings.extend(_zone_trigger_overlap_findings(version))
 
     # No dangling-recording-reference check here: ScenarioVersion.recordings
     # is always derived from these same emissions

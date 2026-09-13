@@ -107,7 +107,7 @@ Domain validation covers schema/references, geometry, mission timing/kinematics,
 
 Intentional RF overlap must not be rejected by the domain schema.
 
-A mission's trajectory must never enter a `NO_FLY` zone (BLOCKING, checked at publish/plan-time, sampled along each waypoint-to-waypoint leg). An `RfEmission.zone_trigger.zone_id` must resolve to a `TRIGGER`-typed `Zone`, and a `DroneRfLink.observed_by_receiver_id` must resolve to a `MONITOR`-typed `Receiver`, both within the same `ScenarioVersion` (BLOCKING) — see ADR-015.
+A mission's trajectory must never enter a `NO_FLY` zone (BLOCKING, checked at publish/plan-time, sampled along each waypoint-to-waypoint leg). An `RfEmission.zone_trigger.zone_id` must resolve to a `TRIGGER`-typed `Zone`, and a `DroneRfLink.observed_by_receiver_id` must resolve to a `MONITOR`-typed `Receiver`, both within the same `ScenarioVersion` (BLOCKING) — see ADR-015. Two `zone_trigger` emissions on the same `DroneRfLink` referencing the same zone, or coexisting with a looping emission, always overlap (BLOCKING) — see ADR-017 for why the general cross-zone/cross-timing-mode overlap case remains open.
 
 ## 7. Portable scenario representation
 
