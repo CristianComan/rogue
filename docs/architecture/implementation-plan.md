@@ -26,6 +26,7 @@ Build ROGUE in bounded, testable increments. Do not begin with hardware-specific
 | M14 | Independent RF validation | measured RF evidence attached to run | Domain + pure comparison + simulated-monitor adapter + orchestration + API code complete — **hardware-unverified**, same constraint as M9/M10/M12/M13 — see ADR-014 |
 | M15 | Region and receiver simulation semantics | `NO_FLY` containment + `TRIGGER`-zone emission timing + receiver-observation reference are domain-modelled and validated | Domain model + reference-integrity validation + tests done — `feature/region-and-receiver-simulation-semantics`; compiler integration was follow-up work, done in M16 — see ADR-015 |
 | M16 | Zone-trigger compiler integration | `zone_trigger` emissions resolve to real `RfWindow`/`CompositeChannel` output; `observed_by_receiver_id` survives into `CompositeChannel` | Done — `feature/zone-trigger-compiler-integration` — see ADR-016 |
+| M17 | Zone-trigger overlap detection (partial) | The two statically-provable `zone_trigger` overlap cases are BLOCKING findings | Done — `feature/zone-trigger-overlap-detection`; cross-zone geometric overlap and zone-trigger-vs-manually-timed overlap remain open, need a polygon-intersection primitive or a validation-time duration_s — see ADR-017 |
 
 ## 3. Feature sequence
 
@@ -589,6 +590,29 @@ channel data when two emissions share a frequency/bandwidth, and `zone_trigger`/
 were verified and left as-is — the former reproduces identically on `develop` before this
 branch, the latter mirrors `array_group_id`'s own existing precedent and is safe because
 `publish_draft` already refuses to publish anything with BLOCKING findings. See ADR-016.
+
+### M17 — Zone-trigger overlap detection (partial)
+
+Branch `feature/zone-trigger-overlap-detection`, based on `develop` after M16. See
+ADR-017 for the full scope record — summary below.
+
+Closes the statically-provable half of the gap ADR-016 flagged: `validate_scenario_
+version` has no `duration_s` and the codebase has no polygon-intersection primitive, so
+the general case (two *different* zones whose polygons overlap in space, or a
+zone-triggered emission against a manually-timed non-looping one) stays out of scope.
+What's cheaply provable without either: two `zone_trigger` emissions on the same link
+referencing the *same* `zone_id` (`zone_trigger_duplicate_zone`, BLOCKING — they
+activate in lockstep by construction), and a `zone_trigger` emission coexisting on a link
+with a `loop=True` emission (`zone_trigger_overlaps_loop`, BLOCKING — a loop is active
+for the whole scenario by definition). Both are simple set/flag checks in
+`rogue.domain.validation._zone_trigger_overlap_findings`, no geometry or mission
+evaluation needed.
+
+Backend domain test suite grew by 3 tests (126 total in `tests/unit/domain`):
+duplicate-zone BLOCKING, zone-trigger-vs-loop BLOCKING, and a negative case (two
+different zone_ids sharing an identical polygon, no loop — confirming the narrow scope
+holds even when the geometry would coincidentally overlap). `ruff`/`mypy` both pass. No
+API, compiler or frontend changes.
 
 ## 4. Git workflow
 

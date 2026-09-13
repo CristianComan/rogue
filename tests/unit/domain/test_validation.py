@@ -435,3 +435,68 @@ def test_leg_fully_inside_no_fly_zone_produces_exactly_one_finding() -> None:
 
     matching = [f for f in findings if f.code == "no_fly_trajectory_containment"]
     assert len(matching) == 1
+
+
+def test_duplicate_zone_trigger_zone_id_on_same_link_is_blocking() -> None:
+    ref = recording_reference()
+    zone = make_zone(zone_type=ZoneType.TRIGGER)
+    emissions = [
+        RfEmission(recording=ref, zone_trigger=ZoneTriggerPolicy(zone_id=zone.id)),
+        RfEmission(recording=ref, zone_trigger=ZoneTriggerPolicy(zone_id=zone.id)),
+    ]
+    link = DroneRfLink(**drone_rf_link_kwargs(recording=ref, emissions=emissions))
+    mission = DroneMission(**drone_mission_kwargs(recording=ref, rf_links=[link]))
+    version = ScenarioVersion(
+        **scenario_version_kwargs(missions=[mission], recordings=[ref], zones=[zone])
+    )
+
+    findings = validate_scenario_version(version)
+
+    codes = {f.code for f in findings if f.severity == ValidationSeverity.BLOCKING}
+    assert "zone_trigger_duplicate_zone" in codes
+
+
+def test_zone_trigger_with_loop_emission_on_same_link_is_blocking() -> None:
+    ref = recording_reference()
+    zone = make_zone(zone_type=ZoneType.TRIGGER)
+    emissions = [
+        RfEmission(recording=ref, start_offset=timedelta(0), loop=True),
+        RfEmission(recording=ref, zone_trigger=ZoneTriggerPolicy(zone_id=zone.id)),
+    ]
+    link = DroneRfLink(**drone_rf_link_kwargs(recording=ref, emissions=emissions))
+    mission = DroneMission(**drone_mission_kwargs(recording=ref, rf_links=[link]))
+    version = ScenarioVersion(
+        **scenario_version_kwargs(missions=[mission], recordings=[ref], zones=[zone])
+    )
+
+    findings = validate_scenario_version(version)
+
+    codes = {f.code for f in findings if f.severity == ValidationSeverity.BLOCKING}
+    assert "zone_trigger_overlaps_loop" in codes
+
+
+def test_zone_trigger_different_zones_without_loop_is_not_blocking() -> None:
+    # Two distinct zone_ids can't be proven to overlap without a
+    # polygon-intersection primitive this module doesn't have (ADR-017) —
+    # this stays out of scope, so no finding is expected here even though
+    # both zones happen to share the same default polygon.
+    ref = recording_reference()
+    zone_a = make_zone(zone_type=ZoneType.TRIGGER)
+    zone_b = make_zone(zone_type=ZoneType.TRIGGER)
+    emissions = [
+        RfEmission(recording=ref, zone_trigger=ZoneTriggerPolicy(zone_id=zone_a.id)),
+        RfEmission(recording=ref, zone_trigger=ZoneTriggerPolicy(zone_id=zone_b.id)),
+    ]
+    link = DroneRfLink(**drone_rf_link_kwargs(recording=ref, emissions=emissions))
+    mission = DroneMission(**drone_mission_kwargs(recording=ref, rf_links=[link]))
+    version = ScenarioVersion(
+        **scenario_version_kwargs(
+            missions=[mission], recordings=[ref], zones=[zone_a, zone_b]
+        )
+    )
+
+    findings = validate_scenario_version(version)
+
+    codes = {f.code for f in findings if f.severity == ValidationSeverity.BLOCKING}
+    assert "zone_trigger_duplicate_zone" not in codes
+    assert "zone_trigger_overlaps_loop" not in codes
