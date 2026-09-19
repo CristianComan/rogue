@@ -51,7 +51,7 @@ x440 = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["backend/rogue"]
+packages = ["backend/rogue", "agents"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
