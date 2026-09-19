@@ -241,9 +241,7 @@ def test_observed_by_receiver_referencing_non_monitor_is_blocking() -> None:
     ref = recording_reference()
     group_id = uuid4()
     receiver = make_receiver(ReceiverType.TDOA, array_group_id=group_id)
-    link = DroneRfLink(
-        **drone_rf_link_kwargs(recording=ref, observed_by_receiver_id=receiver.id)
-    )
+    link = DroneRfLink(**drone_rf_link_kwargs(recording=ref, observed_by_receiver_id=receiver.id))
     mission = DroneMission(**drone_mission_kwargs(recording=ref, rf_links=[link]))
     version = ScenarioVersion(
         **scenario_version_kwargs(missions=[mission], recordings=[ref], receivers=[receiver])
@@ -258,9 +256,7 @@ def test_observed_by_receiver_referencing_non_monitor_is_blocking() -> None:
 def test_observed_by_receiver_referencing_monitor_is_not_blocking() -> None:
     ref = recording_reference()
     receiver = make_receiver(ReceiverType.MONITOR)
-    link = DroneRfLink(
-        **drone_rf_link_kwargs(recording=ref, observed_by_receiver_id=receiver.id)
-    )
+    link = DroneRfLink(**drone_rf_link_kwargs(recording=ref, observed_by_receiver_id=receiver.id))
     mission = DroneMission(**drone_mission_kwargs(recording=ref, rf_links=[link]))
     version = ScenarioVersion(
         **scenario_version_kwargs(missions=[mission], recordings=[ref], receivers=[receiver])
@@ -492,9 +488,7 @@ def test_zone_trigger_different_zones_without_loop_is_not_blocking() -> None:
     link = DroneRfLink(**drone_rf_link_kwargs(recording=ref, emissions=emissions))
     mission = DroneMission(**drone_mission_kwargs(recording=ref, rf_links=[link]))
     version = ScenarioVersion(
-        **scenario_version_kwargs(
-            missions=[mission], recordings=[ref], zones=[zone_a, zone_b]
-        )
+        **scenario_version_kwargs(missions=[mission], recordings=[ref], zones=[zone_a, zone_b])
     )
 
     findings = validate_scenario_version(version)
@@ -527,9 +521,7 @@ def test_zone_trigger_disjoint_zones_produce_no_overlap_warning() -> None:
     link = DroneRfLink(**drone_rf_link_kwargs(recording=ref, emissions=emissions))
     mission = DroneMission(**drone_mission_kwargs(recording=ref, rf_links=[link]))
     version = ScenarioVersion(
-        **scenario_version_kwargs(
-            missions=[mission], recordings=[ref], zones=[zone_a, zone_b]
-        )
+        **scenario_version_kwargs(missions=[mission], recordings=[ref], zones=[zone_a, zone_b])
     )
 
     findings = validate_scenario_version(version)
@@ -562,9 +554,7 @@ def test_zone_trigger_overlapping_zones_across_different_links_is_not_flagged() 
     )
     mission = DroneMission(**drone_mission_kwargs(recording=ref, rf_links=[link_a, link_b]))
     version = ScenarioVersion(
-        **scenario_version_kwargs(
-            missions=[mission], recordings=[ref], zones=[zone_a, zone_b]
-        )
+        **scenario_version_kwargs(missions=[mission], recordings=[ref], zones=[zone_a, zone_b])
     )
 
     findings = validate_scenario_version(version)

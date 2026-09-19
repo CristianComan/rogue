@@ -227,13 +227,20 @@ import boto3
 
 samples = b"".join(struct.pack("<ff", 0.001 * i, -0.001 * i) for i in range(100))
 meta = {
-    "global": {"core:datatype": "cf32_le", "core:sample_rate": 1_000_000,
-               "core:sha512": hashlib.sha512(samples).hexdigest()},
+    "global": {
+        "core:datatype": "cf32_le",
+        "core:sample_rate": 1_000_000,
+        "core:sha512": hashlib.sha512(samples).hexdigest(),
+    },
     "captures": [{"core:sample_start": 0, "core:frequency": 2_400_000_000}],
     "annotations": [],
 }
-s3 = boto3.client("s3", endpoint_url="http://localhost:9000",
-                   aws_access_key_id="rogue", aws_secret_access_key="rogue_dev_password")
+s3 = boto3.client(
+    "s3",
+    endpoint_url="http://localhost:9000",
+    aws_access_key_id="rogue",
+    aws_secret_access_key="rogue_dev_password",
+)
 s3.put_object(Bucket="rogue", Key="manual-check/test.sigmf-meta", Body=json.dumps(meta).encode())
 s3.put_object(Bucket="rogue", Key="manual-check/test.sigmf-data", Body=samples)
 print("uploaded manual-check/test.sigmf-meta and manual-check/test.sigmf-data")
@@ -403,9 +410,14 @@ background recording kind, silence spans/overlap validation.
 
 ```python
 samples_big = b"".join(struct.pack("<ff", 0.001 * i, -0.001 * i) for i in range(2000))
-meta_big = {"global": {"core:datatype": "cf32_le", "core:sample_rate": 1_000_000},
-            "captures": [{"core:sample_start": 0, "core:frequency": 2_400_000_000}], "annotations": []}
-s3.put_object(Bucket="rogue", Key="manual-check/overview.sigmf-meta", Body=json.dumps(meta_big).encode())
+meta_big = {
+    "global": {"core:datatype": "cf32_le", "core:sample_rate": 1_000_000},
+    "captures": [{"core:sample_start": 0, "core:frequency": 2_400_000_000}],
+    "annotations": [],
+}
+s3.put_object(
+    Bucket="rogue", Key="manual-check/overview.sigmf-meta", Body=json.dumps(meta_big).encode()
+)
 s3.put_object(Bucket="rogue", Key="manual-check/overview.sigmf-data", Body=samples_big)
 ```
 ```bash
@@ -613,6 +625,7 @@ Confirm `agents/common/x440_adapter.py`'s UHD calls (`MultiUSRP`,
 written against documented UHD API, not exercised against a real install:
 ```python
 import uhd
+
 usrp = uhd.usrp.MultiUSRP("addr=<your X440's address>")
 print(usrp.get_tx_num_channels())
 print(usrp.get_tx_freq_range(0))
@@ -730,80 +743,149 @@ BASE = "http://localhost:8000"
 
 samples = b"".join(struct.pack("<ff", 0.001 * i, -0.001 * i) for i in range(2000))
 meta = {
-    "global": {"core:datatype": "cf32_le", "core:sample_rate": 1_000_000,
-               "core:sha512": hashlib.sha512(samples).hexdigest()},
+    "global": {
+        "core:datatype": "cf32_le",
+        "core:sample_rate": 1_000_000,
+        "core:sha512": hashlib.sha512(samples).hexdigest(),
+    },
     "captures": [{"core:sample_start": 0, "core:frequency": 2_400_000_000}],
     "annotations": [],
 }
-s3 = boto3.client("s3", endpoint_url="http://localhost:9000",
-                   aws_access_key_id="rogue", aws_secret_access_key="rogue_dev_password")
+s3 = boto3.client(
+    "s3",
+    endpoint_url="http://localhost:9000",
+    aws_access_key_id="rogue",
+    aws_secret_access_key="rogue_dev_password",
+)
 key_prefix = f"m11-m12-check-{uuid.uuid4().hex[:8]}"
 s3.put_object(Bucket="rogue", Key=f"{key_prefix}/test.sigmf-meta", Body=json.dumps(meta).encode())
 s3.put_object(Bucket="rogue", Key=f"{key_prefix}/test.sigmf-data", Body=samples)
 
 client = httpx.Client(base_url=BASE, timeout=10.0)
-scenario = client.post("/scenarios", json={
-    "name": "m11-m12 coherent group check", "owner": "manual-check",
-    "area_of_operation": {"type": "Polygon", "coordinates": [[[13.0, 52.0], [13.6, 52.0], [13.6, 52.6], [13.0, 52.6], [13.0, 52.0]]]},
-}).json()
+scenario = client.post(
+    "/scenarios",
+    json={
+        "name": "m11-m12 coherent group check",
+        "owner": "manual-check",
+        "area_of_operation": {
+            "type": "Polygon",
+            "coordinates": [[[13.0, 52.0], [13.6, 52.0], [13.6, 52.6], [13.0, 52.6], [13.0, 52.0]]],
+        },
+    },
+).json()
 scenario_id = scenario["id"]
-draft_id = client.post(f"/scenarios/{scenario_id}/drafts", json={"author": "manual-check"}).json()["id"]
-recording_id = client.post("/recordings", json={
-    "metadata_object_key": f"{key_prefix}/test.sigmf-meta", "data_object_key": f"{key_prefix}/test.sigmf-data",
-    "provenance": "manual check",
-}).json()["recording"]["id"]
+draft_id = client.post(f"/scenarios/{scenario_id}/drafts", json={"author": "manual-check"}).json()[
+    "id"
+]
+recording_id = client.post(
+    "/recordings",
+    json={
+        "metadata_object_key": f"{key_prefix}/test.sigmf-meta",
+        "data_object_key": f"{key_prefix}/test.sigmf-data",
+        "provenance": "manual check",
+    },
+).json()["recording"]["id"]
 
 group_id = str(uuid.uuid4())
 rx = lambda name, idx, offset: {  # noqa: E731
-    "name": name, "receiver_type": "aoa_doa", "position": {"type": "Point", "coordinates": [13.40, 52.50]},
-    "array_group_id": group_id, "element_index": idx, "element_local_offset_m": offset,
+    "name": name,
+    "receiver_type": "aoa_doa",
+    "position": {"type": "Point", "coordinates": [13.40, 52.50]},
+    "array_group_id": group_id,
+    "element_index": idx,
+    "element_local_offset_m": offset,
 }
 
 draft_content = {
-    "author": "manual-check", "expected_revision": 0, "zones": [], "timeline_events": [],
+    "author": "manual-check",
+    "expected_revision": 0,
+    "zones": [],
+    "timeline_events": [],
     "receivers": [rx("rx-a", 0, [0.0, 0.0, 0.0]), rx("rx-b", 1, [0.0, 5.0, 0.0])],
-    "missions": [{
-        "name": "recon-1", "platform": {"name": "Quad", "category": "multirotor", "max_speed_mps": 18.0},
-        "trajectory": {"template": "waypoint_transit", "default_speed_mps": 12.0, "waypoints": [
-            {"sequence_index": 0, "position": {"type": "Point", "coordinates": [13.40, 52.20]}, "altitude_m": 100.0},
-            {"sequence_index": 1, "position": {"type": "Point", "coordinates": [13.45, 52.25]}, "altitude_m": 100.0},
-        ]},
-        "rf_links": [{
-            "role": "c2", "band": {"freq_min_hz": 2.4e9, "freq_max_hz": 2.4835e9},
-            "frequency_behaviour": {"mode": "scripted", "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.410e9}]},
-            "emissions": [{"recording": {"recording_id": recording_id, "version": 1}}],
-            "array_group_id": group_id,
-            "resource_preference": {"required_sync_class": "l1_software_barrier"},
-        }],
-    }],
+    "missions": [
+        {
+            "name": "recon-1",
+            "platform": {"name": "Quad", "category": "multirotor", "max_speed_mps": 18.0},
+            "trajectory": {
+                "template": "waypoint_transit",
+                "default_speed_mps": 12.0,
+                "waypoints": [
+                    {
+                        "sequence_index": 0,
+                        "position": {"type": "Point", "coordinates": [13.40, 52.20]},
+                        "altitude_m": 100.0,
+                    },
+                    {
+                        "sequence_index": 1,
+                        "position": {"type": "Point", "coordinates": [13.45, 52.25]},
+                        "altitude_m": 100.0,
+                    },
+                ],
+            },
+            "rf_links": [
+                {
+                    "role": "c2",
+                    "band": {"freq_min_hz": 2.4e9, "freq_max_hz": 2.4835e9},
+                    "frequency_behaviour": {
+                        "mode": "scripted",
+                        "scripted_changes": [{"at_offset": "PT0S", "frequency_hz": 2.410e9}],
+                    },
+                    "emissions": [{"recording": {"recording_id": recording_id, "version": 1}}],
+                    "array_group_id": group_id,
+                    "resource_preference": {"required_sync_class": "l1_software_barrier"},
+                }
+            ],
+        }
+    ],
 }
 client.put(f"/scenarios/{scenario_id}/drafts/{draft_id}", json=draft_content).raise_for_status()
 client.post(f"/scenarios/{scenario_id}/drafts/{draft_id}/validate").raise_for_status()
-version_number = client.post(f"/scenarios/{scenario_id}/drafts/{draft_id}/publish").json()["version_number"]
+version_number = client.post(f"/scenarios/{scenario_id}/drafts/{draft_id}/publish").json()[
+    "version_number"
+]
 
-plan = client.post(f"/scenarios/{scenario_id}/versions/{version_number}/compile",
-                    json={"duration_s": 10.0}, headers={"Idempotency-Key": str(uuid.uuid4())}).json()
+plan = client.post(
+    f"/scenarios/{scenario_id}/versions/{version_number}/compile",
+    json={"duration_s": 10.0},
+    headers={"Idempotency-Key": str(uuid.uuid4())},
+).json()
 plan_id = plan["id"]
 print("required_sync_class:", plan["required_sync_class"])
 print("rf_windows:", len(plan["rf_windows"]), "allocations:", len(plan["allocations"]))
 for w in plan["rf_windows"]:
     for ch in w["channels"]:
-        print("  coherent_group_id=", ch.get("coherent_group_id"), "phase=", ch.get("phase_offset_rad"),
-              "delay=", ch.get("delay_offset_s"),
-              "doppler_samples=", len(ch["doppler_schedule"]) if ch.get("doppler_schedule") else None)
+        print(
+            "  coherent_group_id=",
+            ch.get("coherent_group_id"),
+            "phase=",
+            ch.get("phase_offset_rad"),
+            "delay=",
+            ch.get("delay_offset_s"),
+            "doppler_samples=",
+            len(ch["doppler_schedule"]) if ch.get("doppler_schedule") else None,
+        )
 
-run = client.post(f"/scenarios/{scenario_id}/replay-plans/{plan_id}/runs",
-                   json={"operator": "manual-check"}, headers={"Idempotency-Key": str(uuid.uuid4())}).json()
+run = client.post(
+    f"/scenarios/{scenario_id}/replay-plans/{plan_id}/runs",
+    json={"operator": "manual-check"},
+    headers={"Idempotency-Key": str(uuid.uuid4())},
+).json()
 run_id = run["id"]
-client.post(f"/scenarios/{scenario_id}/replay-plans/{plan_id}/runs/{run_id}/arm",
-            headers={"Idempotency-Key": str(uuid.uuid4())}).raise_for_status()
-start = client.post(f"/scenarios/{scenario_id}/replay-plans/{plan_id}/runs/{run_id}/start",
-                     headers={"Idempotency-Key": str(uuid.uuid4())}).json()
+client.post(
+    f"/scenarios/{scenario_id}/replay-plans/{plan_id}/runs/{run_id}/arm",
+    headers={"Idempotency-Key": str(uuid.uuid4())},
+).raise_for_status()
+start = client.post(
+    f"/scenarios/{scenario_id}/replay-plans/{plan_id}/runs/{run_id}/start",
+    headers={"Idempotency-Key": str(uuid.uuid4())},
+).json()
 print("started:", start["status"])
 for e in start["events"]:
     print(" ", e["kind"], "-", e["message"])
-client.post(f"/scenarios/{scenario_id}/replay-plans/{plan_id}/runs/{run_id}/stop",
-            headers={"Idempotency-Key": str(uuid.uuid4())}).raise_for_status()
+client.post(
+    f"/scenarios/{scenario_id}/replay-plans/{plan_id}/runs/{run_id}/stop",
+    headers={"Idempotency-Key": str(uuid.uuid4())},
+).raise_for_status()
 ```
 ```bash
 python /tmp/verify_m11_m12.py

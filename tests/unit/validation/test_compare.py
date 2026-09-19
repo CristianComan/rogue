@@ -82,8 +82,10 @@ def test_underrun_is_always_blocking() -> None:
         window=window, allocation=None, channel=None, receiver=receiver, measurement=measurement
     )
 
-    assert any(f.code == "underrun_detected" and f.severity == ValidationSeverity.BLOCKING
-               for f in findings)
+    assert any(
+        f.code == "underrun_detected" and f.severity == ValidationSeverity.BLOCKING
+        for f in findings
+    )
 
 
 def test_frequency_within_tolerance_produces_no_finding() -> None:
@@ -162,10 +164,7 @@ def test_delay_beyond_tolerance_is_blocking_for_tdoa_element() -> None:
     plan, receivers = make_coherent_group_plan(receiver_type=ReceiverType.TDOA)
     other = next(r for r in receivers if r.element_index == 1)  # non-reference element
     window = next(
-        w
-        for w in plan.rf_windows
-        for c in w.channels
-        if c.array_element_receiver_id == other.id
+        w for w in plan.rf_windows for c in w.channels if c.array_element_receiver_id == other.id
     )
     channel = next(c for c in window.channels if c.array_element_receiver_id == other.id)
     assert channel.delay_offset_s is not None
@@ -187,10 +186,7 @@ def test_phase_beyond_tolerance_is_blocking_for_aoa_doa_element() -> None:
     plan, receivers = make_coherent_group_plan(receiver_type=ReceiverType.AOA_DOA)
     other = next(r for r in receivers if r.element_index == 1)
     window = next(
-        w
-        for w in plan.rf_windows
-        for c in w.channels
-        if c.array_element_receiver_id == other.id
+        w for w in plan.rf_windows for c in w.channels if c.array_element_receiver_id == other.id
     )
     channel = next(c for c in window.channels if c.array_element_receiver_id == other.id)
     assert channel.phase_offset_rad is not None

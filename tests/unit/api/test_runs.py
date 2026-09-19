@@ -179,9 +179,7 @@ def test_arm_is_idempotent_for_the_same_key(client: TestClient) -> None:
     ).json()
     headers = {"Idempotency-Key": "run-arm-test-key"}
 
-    first = client.post(
-        _runs_url(scenario["id"], plan["id"], f"/{run['id']}/arm"), headers=headers
-    )
+    first = client.post(_runs_url(scenario["id"], plan["id"], f"/{run['id']}/arm"), headers=headers)
     second = client.post(
         _runs_url(scenario["id"], plan["id"], f"/{run['id']}/arm"), headers=headers
     )
