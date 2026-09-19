@@ -38,7 +38,8 @@ const ITEMS: NavItem[] = [
       { x: 2, y: 2, w: 12, h: 12, r: 1 },
       { x: 5, y: 5, w: 6, h: 6, r: 3 },
     ],
-    isActive: (p) => p.startsWith("/scenarios/") && !p.includes("/replay") && !p.includes("/versions/"),
+    isActive: (p) =>
+      p.startsWith("/scenarios/") && !p.includes("/replay") && !p.includes("/versions/"),
   },
   {
     key: "replay",
@@ -102,7 +103,9 @@ export function NavRail() {
           marginBottom: 10,
         }}
       >
-        <div style={{ width: 10, height: 10, background: "var(--accent)", transform: "rotate(45deg)" }} />
+        <div
+          style={{ width: 10, height: 10, background: "var(--accent)", transform: "rotate(45deg)" }}
+        />
       </div>
       {ITEMS.map((item) => {
         const active = item.isActive(location.pathname);

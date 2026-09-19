@@ -57,9 +57,7 @@ def point_in_polygon(point: GeoPoint, polygon: GeoPolygon) -> bool:
     return inside
 
 
-def _orientation(
-    a: tuple[float, float], b: tuple[float, float], c: tuple[float, float]
-) -> float:
+def _orientation(a: tuple[float, float], b: tuple[float, float], c: tuple[float, float]) -> float:
     """Signed area of triangle a-b-c: >0 counter-clockwise, <0 clockwise, 0 collinear."""
     return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
 

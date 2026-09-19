@@ -22,8 +22,18 @@ export function AppShell({ breadcrumb, actions, subnav, scroll = true, children 
   return (
     <div style={{ display: "flex", height: "100%" }}>
       <NavRail />
-      {subnav && <Subnav pageTitle={subnav.pageTitle} items={subnav.items} footer={subnav.footer} />}
-      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      {subnav && (
+        <Subnav pageTitle={subnav.pageTitle} items={subnav.items} footer={subnav.footer} />
+      )}
+      <div
+        style={{
+          flex: 1,
+          minWidth: 0,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
         <TopBar breadcrumb={breadcrumb} actions={actions} />
         <div
           style={{

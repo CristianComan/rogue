@@ -70,16 +70,28 @@ export function SdrConsolePage() {
         pageTitle: "SDR Console",
         items: [
           { label: "Agents", count: agents.length, active: true },
-          { label: "Devices", count: new Set(channels.map((c) => `${c.agentId}:${c.deviceId}`)).size },
+          {
+            label: "Devices",
+            count: new Set(channels.map((c) => `${c.agentId}:${c.deviceId}`)).size,
+          },
           { label: "Physical TX channels", count: totalChannels },
         ],
       }}
       actions={<CommandButton label="Discover agents" onClick={refresh} disabled={refreshing} />}
     >
       <div style={{ padding: "16px 18px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
-        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "flex-end",
+            justifyContent: "space-between",
+            gap: 16,
+          }}
+        >
           <div>
-            <div style={{ fontSize: 20, fontWeight: 600, letterSpacing: "-0.01em" }}>SDR Console</div>
+            <div style={{ fontSize: 20, fontWeight: 600, letterSpacing: "-0.01em" }}>
+              SDR Console
+            </div>
             <div style={{ fontSize: 12.5, color: "var(--ink-2)", marginTop: 3 }}>
               Runtime hardware inventory — agents, devices, physical TX channels. Independent of any
               scenario.
@@ -119,14 +131,27 @@ export function SdrConsolePage() {
           </div>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(302px,1fr))", gap: 11 }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill,minmax(302px,1fr))",
+            gap: 11,
+          }}
+        >
           {agents.map((agent) => (
             <AgentCard key={agent.agent_id} agent={agent} />
           ))}
         </div>
 
         {channels.length > 0 && (
-          <div style={{ background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 3, overflow: "hidden" }}>
+          <div
+            style={{
+              background: "var(--surface)",
+              border: "1px solid var(--line)",
+              borderRadius: 3,
+              overflow: "hidden",
+            }}
+          >
             <div
               style={{
                 padding: "8px 12px",

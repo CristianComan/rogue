@@ -103,13 +103,26 @@ export function ScenarioLibraryPage() {
         footer: "deny-TX default · scenario draft is\nhardware-independent",
       }}
       actions={
-        <CommandButton label="+ New scenario" variant="accent" onClick={() => setShowNewForm((v) => !v)} />
+        <CommandButton
+          label="+ New scenario"
+          variant="accent"
+          onClick={() => setShowNewForm((v) => !v)}
+        />
       }
     >
       <div style={{ padding: "16px 18px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
-        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "flex-end",
+            justifyContent: "space-between",
+            gap: 16,
+          }}
+        >
           <div>
-            <div style={{ fontSize: 20, fontWeight: 600, letterSpacing: "-0.01em" }}>Scenario Library</div>
+            <div style={{ fontSize: 20, fontWeight: 600, letterSpacing: "-0.01em" }}>
+              Scenario Library
+            </div>
             <div style={{ fontSize: 12.5, color: "var(--ink-2)", marginTop: 3 }}>
               Hardware-independent scenario drafts and published immutable versions.
             </div>
@@ -257,8 +270,17 @@ export function ScenarioLibraryPage() {
                 </div>
               </div>
               <div style={{ color: "var(--ink-2)", fontSize: 12.5 }}>{s.owner}</div>
-              <div style={{ color: "var(--ink-2)", fontSize: 12.5 }}>{s.tags.join(", ") || "—"}</div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <div style={{ color: "var(--ink-2)", fontSize: 12.5 }}>
+                {s.tags.join(", ") || "—"}
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                }}
+              >
                 <Badge tone={s.current_version_id ? "ok" : "mute"}>
                   {s.current_version_id ? "published" : "draft"}
                 </Badge>
@@ -445,7 +467,12 @@ function CloneScenarioForm({
           <input placeholder="Owner" value={owner} onChange={(e) => setOwner(e.target.value)} />
           {error && <span style={{ color: "var(--bad-fg)", fontSize: 12 }}>{error}</span>}
           <div style={{ display: "flex", gap: 8 }}>
-            <button type="button" data-variant="primary" onClick={submit} disabled={!name || !owner}>
+            <button
+              type="button"
+              data-variant="primary"
+              onClick={submit}
+              disabled={!name || !owner}
+            >
               Clone
             </button>
             <button type="button" onClick={onCancel}>
