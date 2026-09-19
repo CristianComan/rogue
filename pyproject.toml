@@ -39,21 +39,35 @@ dev = [
   "hypothesis>=6.0,<7.0",
   "ruff>=0.6,<1.0",
   "mypy>=1.11,<2.0",
+  "types-PyYAML>=6.0,<7.0",
+  "types-shapely>=2.0,<3.0",
   "pre-commit>=3.8,<5.0"
+]
+# Only needed on a real X440 Agent host (M9, ADR-009) — not the control
+# plane, not simulated agents, not the test suite. Install with
+# `pip install .[x440]` on that bare-metal host (ADR-004).
+x440 = [
+  "uhd>=4.6,<5.0"
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["backend/rogue"]
+packages = ["backend/rogue", "agents"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-ra --strict-markers"
+markers = [
+  "nats: requires a reachable NATS broker (e.g. `docker compose up -d nats`); skips itself otherwise",
+]
 
 [tool.ruff]
 target-version = "py312"
 line-length = 100
 src = ["backend", "agents", "tests"]
+# Alembic autogenerates these; hand-formatting them fights every future
+# `alembic revision --autogenerate` run. env.py is hand-written and stays linted.
+extend-exclude = ["backend/rogue/db/migrations/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
@@ -68,7 +82,8 @@ strict = true
 warn_unused_configs = true
 plugins = ["pydantic.mypy"]
 mypy_path = ["backend", "agents"]
+exclude = ["backend/rogue/db/migrations/versions"]
 
 [[tool.mypy.overrides]]
-module = ["boto3.*", "geoalchemy2.*", "nats.*"]
+module = ["boto3.*", "botocore.*", "geoalchemy2.*", "nats.*", "uhd.*", "SoapySDR.*"]
 ignore_missing_imports = true

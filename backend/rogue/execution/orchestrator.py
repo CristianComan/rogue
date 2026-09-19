@@ -1,0 +1,414 @@
+"""The prepare/arm/start/stop state machine (M7), pure and DB-free — mirrors
+rogue.compiler.compile's split from rogue.persistence.replay: this module
+takes already-loaded domain objects and an adapter, and returns a new
+ScenarioRun; rogue.persistence.run does the surrounding database I/O.
+
+Each channel is configured/armed/started once, using its *earliest*
+allocation's window — runtime re-configuration mid-run on a BAND_SWITCH
+event is not simulated in this pass (see ADR-007's assumptions); a full
+scheduler loop that walks the compiled timeline live is deferred alongside
+the real distributed Agent work (M8).
+"""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime, timedelta
+from uuid import UUID
+
+from rogue.compiler.models import Allocation, ReplayPlan, RfWindow
+from rogue.domain.recording import IQRecording
+from rogue.domain.rf import TimingSyncClass
+from rogue.domain.run import DeviceLease, RunEvent, RunEventKind, RunStatus, ScenarioRun
+from rogue.domain.validation import ValidationSeverity
+from rogue.execution.adapter import AdapterOperationError, SDRAdapter
+
+# How long a reservation is valid without renewal (ADR-008). The lease-sweep
+# task (rogue.execution.lease_sweep) renews on an interval well under this,
+# so an unrenewed lease only lapses if the control plane itself has stopped
+# advancing runs.
+LEASE_TTL_SECONDS = 30.0
+
+# M11 (ADR-013): how far into the future a synchronized barrier start is
+# scheduled — generous enough to cover NATS round-trip + per-Agent dispatch
+# to every channel before any of them needs to actually fire. Settle margin
+# is the extra wait past the barrier before polling each channel's
+# `actual_tx_start_at`, so a channel that fires right at the barrier is
+# reliably observed rather than raced.
+BARRIER_MARGIN_SECONDS = 0.5
+BARRIER_SETTLE_MARGIN_SECONDS = 0.2
+
+
+class InvalidRunTransitionError(Exception):
+    """Raised when a lifecycle call is made from the wrong RunStatus."""
+
+    def __init__(self, expected: RunStatus, actual: RunStatus, action: str) -> None:
+        super().__init__(f"cannot {action} a run in status {actual!r}, expected {expected!r}")
+        self.expected = expected
+        self.actual = actual
+        self.action = action
+
+
+def _first_allocation_per_channel(plan: ReplayPlan) -> dict[tuple[str, int], Allocation]:
+    """The earliest allocation for each (device_id, channel_index) — see module docstring."""
+    by_channel: dict[tuple[str, int], Allocation] = {}
+    for allocation in sorted(plan.allocations, key=lambda a: a.start_seconds):
+        key = (allocation.device_id, allocation.channel_index)
+        by_channel.setdefault(key, allocation)
+    return by_channel
+
+
+def _window_for(plan: ReplayPlan, allocation: Allocation) -> RfWindow | None:
+    for window in plan.rf_windows:
+        if (
+            window.window_key == allocation.window_key
+            and window.start_seconds == allocation.start_seconds
+            and window.end_seconds == allocation.end_seconds
+        ):
+            return window
+    return None
+
+
+def _recordings_for_window(
+    window: RfWindow, recordings: dict[tuple[UUID, int], IQRecording]
+) -> list[IQRecording]:
+    """The distinct recordings this window's composite channels actually
+    reference (M9, ADR-009) — what a channel's Agent needs cached, not the
+    plan's entire `recording_manifest` regardless of relevance.
+    """
+    seen: dict[tuple[UUID, int], IQRecording] = {}
+    for channel in window.channels:
+        key = (channel.recording.recording_id, channel.recording.version)
+        recording = recordings.get(key)
+        if recording is not None:
+            seen[key] = recording
+    return list(seen.values())
+
+
+class _RunBuilder:
+    """Accumulates events/leases for one lifecycle call, appending only."""
+
+    def __init__(self, run: ScenarioRun) -> None:
+        self._run = run
+        self.events = list(run.events)
+        self.leases = list(run.device_leases)
+        self._sequence = len(run.events)
+
+    def event(
+        self,
+        kind: RunEventKind,
+        message: str,
+        *,
+        device_id: str | None = None,
+        channel_index: int | None = None,
+        severity: ValidationSeverity = ValidationSeverity.WARNING,
+    ) -> None:
+        self._sequence += 1
+        self.events.append(
+            RunEvent(
+                at=datetime.now(UTC),
+                sequence=self._sequence,
+                kind=kind,
+                device_id=device_id,
+                channel_index=channel_index,
+                message=message,
+                severity=severity,
+            )
+        )
+
+    def fail(
+        self,
+        message: str,
+        *,
+        device_id: str | None = None,
+        channel_index: int | None = None,
+    ) -> ScenarioRun:
+        self.event(
+            RunEventKind.ERROR,
+            message,
+            device_id=device_id,
+            channel_index=channel_index,
+            severity=ValidationSeverity.BLOCKING,
+        )
+        return self._run.model_copy(
+            update={"status": RunStatus.FAILED, "events": self.events, "device_leases": self.leases}
+        )
+
+    def advance(self, status: RunStatus) -> ScenarioRun:
+        return self._run.model_copy(
+            update={"status": status, "events": self.events, "device_leases": self.leases}
+        )
+
+
+async def prepare_run(
+    run: ScenarioRun,
+    plan: ReplayPlan,
+    recordings: dict[tuple[UUID, int], IQRecording],
+    adapter: SDRAdapter,
+) -> ScenarioRun:
+    """Reserve every allocated channel, verify every referenced recording's
+    hashes against the catalogue's current state, then preflight/configure
+    each channel. Fails (returns a FAILED run) on the first problem rather
+    than partially preparing.
+    """
+    if run.status != RunStatus.CREATED:
+        raise InvalidRunTransitionError(RunStatus.CREATED, run.status, "prepare")
+
+    builder = _RunBuilder(run)
+    channels = _first_allocation_per_channel(plan)
+
+    for (device_id, channel_index), _allocation in channels.items():
+        try:
+            lease = await adapter.reserve(device_id, channel_index, run.id, LEASE_TTL_SECONDS)
+        except AdapterOperationError as exc:
+            return builder.fail(str(exc), device_id=device_id, channel_index=channel_index)
+        builder.leases.append(lease)
+        builder.event(
+            RunEventKind.RESERVED,
+            f"reserved {device_id}:{channel_index}",
+            device_id=device_id,
+            channel_index=channel_index,
+        )
+
+    for entry in plan.recording_manifest:
+        recording = recordings.get((entry.recording_id, entry.version))
+        if recording is None:
+            return builder.fail(
+                f"recording {entry.recording_id} v{entry.version} is no longer in the catalogue"
+            )
+        if (
+            recording.sha256_metadata != entry.sha256_metadata
+            or recording.sha256_data != entry.sha256_data
+        ):
+            return builder.fail(
+                f"recording {entry.recording_id} v{entry.version} no longer matches the "
+                "plan's pinned checksums"
+            )
+        builder.event(
+            RunEventKind.PREFETCH_VERIFIED,
+            f"verified recording {entry.recording_id} v{entry.version}",
+        )
+
+    for (device_id, channel_index), allocation in channels.items():
+        window = _window_for(plan, allocation)
+        if window is None:
+            return builder.fail(
+                "allocation references a window that isn't in the plan",
+                device_id=device_id,
+                channel_index=channel_index,
+            )
+        try:
+            await adapter.preflight(
+                device_id, channel_index, window, _recordings_for_window(window, recordings)
+            )
+            await adapter.configure(device_id, channel_index, window)
+        except AdapterOperationError as exc:
+            return builder.fail(str(exc), device_id=device_id, channel_index=channel_index)
+        builder.event(
+            RunEventKind.CONFIGURED,
+            f"configured {device_id}:{channel_index}",
+            device_id=device_id,
+            channel_index=channel_index,
+        )
+
+    return builder.advance(RunStatus.PREPARED)
+
+
+async def arm_run(run: ScenarioRun, plan: ReplayPlan, adapter: SDRAdapter) -> ScenarioRun:
+    if run.status != RunStatus.PREPARED:
+        raise InvalidRunTransitionError(RunStatus.PREPARED, run.status, "arm")
+
+    builder = _RunBuilder(run)
+    for (device_id, channel_index), allocation in _first_allocation_per_channel(plan).items():
+        try:
+            await adapter.arm(device_id, channel_index, allocation.start_seconds)
+        except AdapterOperationError as exc:
+            return builder.fail(str(exc), device_id=device_id, channel_index=channel_index)
+        builder.event(
+            RunEventKind.ARMED,
+            f"armed {device_id}:{channel_index}",
+            device_id=device_id,
+            channel_index=channel_index,
+        )
+    return builder.advance(RunStatus.ARMED)
+
+
+async def start_run(run: ScenarioRun, plan: ReplayPlan, adapter: SDRAdapter) -> ScenarioRun:
+    if run.status != RunStatus.ARMED:
+        raise InvalidRunTransitionError(RunStatus.ARMED, run.status, "start")
+
+    channels = list(_first_allocation_per_channel(plan))
+    if plan.required_sync_class == TimingSyncClass.L0_SIMULATED:
+        return await _start_sequential(run, channels, adapter)
+    return await _start_with_barrier(run, plan, channels, adapter)
+
+
+async def _start_sequential(
+    run: ScenarioRun, channels: list[tuple[str, int]], adapter: SDRAdapter
+) -> ScenarioRun:
+    """No synchronization requested (the default) — behavior is identical
+    to before M11 existed: one channel at a time, no barrier.
+    """
+    builder = _RunBuilder(run)
+    for device_id, channel_index in channels:
+        try:
+            await adapter.start(device_id, channel_index)
+        except AdapterOperationError as exc:
+            return builder.fail(str(exc), device_id=device_id, channel_index=channel_index)
+        builder.event(
+            RunEventKind.STARTED,
+            f"started {device_id}:{channel_index}",
+            device_id=device_id,
+            channel_index=channel_index,
+        )
+    return builder.advance(RunStatus.RUNNING)
+
+
+async def _start_with_barrier(
+    run: ScenarioRun,
+    plan: ReplayPlan,
+    channels: list[tuple[str, int]],
+    adapter: SDRAdapter,
+) -> ScenarioRun:
+    """A software-barrier synchronized start (M11, ADR-013): every channel's
+    `start()` is issued *concurrently*, each carrying the same future
+    `barrier_at`, then this waits past that instant and reads back each
+    channel's actual fire time to measure the achieved skew — the
+    "measured," not just "declared," half of M11's exit criterion.
+
+    L1 (software barrier) is the best class actually achievable today —
+    neither vendor adapter exposes any PPS/PTP capability — so that's what
+    runs here regardless of whether the scenario asked for L1, L2, L3 or
+    L4; the compiler already warned at compile time if L3/L4 was requested
+    (`sync_class_not_achievable`). This function's job is only to execute
+    and measure, not to re-litigate what's achievable.
+    """
+    builder = _RunBuilder(run)
+    barrier_at = datetime.now(UTC) + timedelta(seconds=BARRIER_MARGIN_SECONDS)
+
+    start_results = await asyncio.gather(
+        *(
+            adapter.start(device_id, channel_index, barrier_at=barrier_at)
+            for device_id, channel_index in channels
+        ),
+        return_exceptions=True,
+    )
+    for (device_id, channel_index), result in zip(channels, start_results, strict=True):
+        if isinstance(result, AdapterOperationError):
+            return builder.fail(str(result), device_id=device_id, channel_index=channel_index)
+        if isinstance(result, BaseException):
+            raise result
+        builder.event(
+            RunEventKind.STARTED,
+            f"scheduled barrier start for {device_id}:{channel_index} at {barrier_at.isoformat()}",
+            device_id=device_id,
+            channel_index=channel_index,
+        )
+
+    settle_seconds = (
+        barrier_at - datetime.now(UTC)
+    ).total_seconds() + BARRIER_SETTLE_MARGIN_SECONDS
+    if settle_seconds > 0:
+        await asyncio.sleep(settle_seconds)
+
+    statuses = await asyncio.gather(
+        *(adapter.status(device_id, channel_index) for device_id, channel_index in channels)
+    )
+    for (device_id, channel_index), status in zip(channels, statuses, strict=True):
+        if status.last_error is not None:
+            return builder.fail(status.last_error, device_id=device_id, channel_index=channel_index)
+
+    actual_times = [s.actual_tx_start_at for s in statuses if s.actual_tx_start_at is not None]
+    if len(actual_times) < len(channels):
+        builder.event(
+            RunEventKind.SYNC_MEASURED,
+            f"barrier start requested {plan.required_sync_class.value}: only "
+            f"{len(actual_times)}/{len(channels)} channel(s) had reported an actual start time "
+            "by the settle deadline",
+            severity=ValidationSeverity.WARNING,
+        )
+    else:
+        skew_seconds = (max(actual_times) - min(actual_times)).total_seconds()
+        builder.event(
+            RunEventKind.SYNC_MEASURED,
+            f"barrier start requested {plan.required_sync_class.value}, executed via "
+            f"{TimingSyncClass.L1_SOFTWARE_BARRIER.value}: measured skew "
+            f"{skew_seconds * 1000:.1f} ms across {len(channels)} channel(s)",
+        )
+    return builder.advance(RunStatus.RUNNING)
+
+
+async def stop_run(run: ScenarioRun, plan: ReplayPlan, adapter: SDRAdapter) -> ScenarioRun:
+    if run.status not in (RunStatus.ARMED, RunStatus.RUNNING):
+        raise InvalidRunTransitionError(RunStatus.RUNNING, run.status, "stop")
+
+    builder = _RunBuilder(run)
+    for device_id, channel_index in _first_allocation_per_channel(plan):
+        try:
+            await adapter.stop(device_id, channel_index)
+        except AdapterOperationError as exc:
+            return builder.fail(str(exc), device_id=device_id, channel_index=channel_index)
+        builder.event(
+            RunEventKind.STOPPED,
+            f"stopped {device_id}:{channel_index}",
+            device_id=device_id,
+            channel_index=channel_index,
+        )
+    return builder.advance(RunStatus.STOPPED)
+
+
+async def emergency_stop_run(
+    run: ScenarioRun, plan: ReplayPlan, adapter: SDRAdapter
+) -> ScenarioRun:
+    """Always succeeds in reaching EMERGENCY_STOPPED, from any status.
+
+    Per CLAUDE.md's safety rules, this path is dedicated-tested and must
+    never itself fail — a per-channel adapter error is recorded as an event
+    but does not stop the sweep across the remaining channels, and never
+    prevents the run from landing in EMERGENCY_STOPPED.
+    """
+    builder = _RunBuilder(run)
+    for device_id, channel_index in _first_allocation_per_channel(plan):
+        try:
+            await adapter.emergency_stop(device_id, channel_index)
+            builder.event(
+                RunEventKind.EMERGENCY_STOPPED,
+                f"emergency-stopped {device_id}:{channel_index}",
+                device_id=device_id,
+                channel_index=channel_index,
+                severity=ValidationSeverity.BLOCKING,
+            )
+        except Exception as exc:  # noqa: BLE001 - emergency stop must not itself fail
+            builder.event(
+                RunEventKind.ERROR,
+                f"emergency-stop reported an error for {device_id}:{channel_index}: {exc}",
+                device_id=device_id,
+                channel_index=channel_index,
+                severity=ValidationSeverity.BLOCKING,
+            )
+    return builder.advance(RunStatus.EMERGENCY_STOPPED)
+
+
+async def renew_leases(run: ScenarioRun, plan: ReplayPlan, adapter: SDRAdapter) -> ScenarioRun:
+    """Extend every lease's `expires_at` — the central half of lease
+    enforcement (ADR-008), called periodically by `rogue.execution.
+    lease_sweep` for any run still ARMED/RUNNING. On a renewal failure the
+    run is marked FAILED (mirrors every other lifecycle step); the caller
+    is responsible for then emergency-stopping a FAILED run that may still
+    have live channels — `renew_leases` itself only renews or fails.
+    """
+    if run.status not in (RunStatus.ARMED, RunStatus.RUNNING):
+        raise InvalidRunTransitionError(RunStatus.RUNNING, run.status, "renew leases for")
+
+    builder = _RunBuilder(run)
+    renewed_leases: list[DeviceLease] = []
+    for lease in run.device_leases:
+        try:
+            renewed_leases.append(await adapter.renew(lease, LEASE_TTL_SECONDS))
+        except AdapterOperationError as exc:
+            return builder.fail(
+                str(exc), device_id=lease.device_id, channel_index=lease.channel_index
+            )
+    builder.leases = renewed_leases
+    builder.event(RunEventKind.LEASE_RENEWED, f"renewed {len(renewed_leases)} lease(s)")
+    return builder.advance(run.status)

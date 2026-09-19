@@ -43,6 +43,14 @@ Implementations initially include:
 
 Vendor libraries (UHD, SoapySDR, libiio or other device APIs) stay behind adapters.
 
+**Implemented (M9/M10, ADR-009/ADR-010):** `agents/common/x440_adapter.py`'s
+`EttusX440Adapter` (UHD) and `agents/common/air7311_adapter.py`'s
+`DeepwaveAIR7311Adapter` (native SoapySDR), both thin subclasses of
+`agents/common/sdr_adapter_base.StreamingSDRAdapter`, which holds the
+vendor-agnostic lease/streaming logic behind a `RealDeviceSeam` so both are
+unit-tested without either vendor SDK installed. **Neither is verified
+against real hardware** — see ADR-009/ADR-010's explicit scope records.
+
 ## 3. Initial laboratory hardware profile
 
 Initial target:
@@ -54,19 +62,39 @@ Static profiles are planning defaults only. Runtime discovery/readback is author
 
 The design baseline states that native X440 RF coverage does not cover 5.2/5.8 GHz. Therefore those bands are normally assigned to AIR7311-capable paths unless an explicit external frequency-conversion chain is modeled. X440 paths may serve 2.4 GHz and other supported sub-4-GHz windows.
 
+**Implemented (M10, ADR-010):** `rogue.persistence.agents.
+aggregate_capability_profile` builds a live `HardwareCapabilityProfile`
+from every currently-online registered Agent of either family;
+`rogue.persistence.replay.compile_and_store_replay_plan` schedules against
+it by default, falling back to the static `DEFAULT_CAPABILITY_PROFILE`
+only when no Agent is online — the compiler's existing capability-based
+channel selection (`rogue/compiler/allocation.py`, unchanged) now actually
+runs against real, connected hardware of both families instead of always
+the illustrative default.
+
 ## 4. Agent command model
 
 Versioned commands include:
-- reserve / release;
-- prefetch / verify;
+- reserve / release / renew-lease;
+- preflight (prefetch/verify);
 - configure;
 - arm;
-- start-at;
-- stop;
+- start / stop;
 - emergency-stop;
 - status.
 
 Every command/ACK includes correlation ID, sequence, timestamps, state and structured errors. Commands are idempotent, expire, and are rejected when stale or outside an active lease.
+
+**Implemented (M8, ADR-008):** `backend/rogue/protocol/messages.py` defines
+`AgentCommand`/`AgentAck` (plus `AgentPresence`/`AgentTelemetry`) as the
+concrete versioned shapes above; `subjects.py` gives each Agent its own
+NATS request-reply command subject (`rogue.agents.{agent_id}.cmd`) and
+telemetry subject (`rogue.agents.{agent_id}.telemetry`), alongside the
+shared presence subject. `rogue.execution.remote_adapter.RemoteAgentAdapter`
+is the control-plane side; `agents/common/agent.AgentRuntime` is the Agent
+side. Lease expiry is real (`DeviceLease.expires_at`): the central
+`rogue.execution.lease_sweep` task renews active runs' leases on a short
+interval and emergency-stops one that lapses (rule 12's central half).
 
 ## 5. Timing and synchronization classes
 
@@ -98,6 +126,25 @@ Agent safety is independent of control-plane availability:
 - record stop acknowledgements and faults.
 
 Real hardware tests must never automatically enable uncontrolled over-the-air transmission.
+
+**Implemented (M8, ADR-008):** enforced twice, matching CLAUDE.md rule 12.
+Centrally, `rogue.execution.lease_sweep` renews every ARMED/RUNNING run's
+leases and emergency-stops one whose lease lapses or fails to renew — this
+still depends on the control plane itself being up. Locally,
+`agents/common/agent.AgentRuntime` tracks last control-plane contact per
+leased channel and emergency-stops its own adapter if a channel stays
+armed/transmitting past a timeout with no contact, entirely independent of
+whether the control plane is reachable — this is what actually covers a
+dead/partitioned control-plane process, as opposed to a dead Agent process
+(which the central sweep instead detects via a failed renewal request).
+
+**Implemented (M9, ADR-009):** the "explicit RF approval/environment gate"
+above is `settings.enable_real_tx`/`ROGUE_ENABLE_REAL_TX` (default
+`False`), checked in `EttusX440Adapter.start()` — refuses to key the
+transmitter and never touches the device otherwise. This is a local,
+per-Agent-host interlock, separate from the compiler's
+`SafetyPolicyOutcome.tx_authorized` (still a structural placeholder; a
+full policy engine is a separate, later concern).
 
 ## 8. Simulation first
 
