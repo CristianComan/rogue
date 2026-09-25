@@ -19,7 +19,7 @@ from pathlib import Path
 from nats.aio.client import Client as NATSClient
 from nats.aio.msg import Msg
 
-from agents.common import cache
+from agents.common import cache, local_recording_source
 from agents.common.air7311_adapter import DeepwaveAIR7311Adapter, SoapyDevice
 from agents.common.x440_adapter import EttusX440Adapter, UHDDevice
 from rogue.catalogue.sigmf import bytes_per_sample, parse_metadata
@@ -109,11 +109,17 @@ class AgentRuntime:
         mode: str = "simulated",
         x440_device: UHDDevice | None = None,
         air7311_device: SoapyDevice | None = None,
+        local_recording_root: Path | None = None,
     ) -> None:
         self.agent_id = agent_id
         self.mode = mode
         self.capabilities = capabilities
         self.cache_dir = cache_dir
+        # ADR-019, M19b: when set, PREFLIGHT resolves recordings from this
+        # local SigMF root instead of MinIO — the only thing that forks per
+        # source; everything downstream (`_load_cached_recording`, the
+        # adapter itself) reads `cache_dir` exactly the same either way.
+        self.local_recording_root = local_recording_root
         self.adapter: SDRAdapter = self._build_adapter(
             mode, capabilities, cache_dir, x440_device, air7311_device
         )
@@ -191,7 +197,12 @@ class AgentRuntime:
         if kind == AgentCommandKind.PREFLIGHT:
             assert command.window is not None
             for entry in command.recordings or []:
-                await cache.ensure_cached(self.cache_dir, entry)
+                if self.local_recording_root is not None:
+                    await local_recording_source.ensure_cached(
+                        self.local_recording_root, self.cache_dir, entry
+                    )
+                else:
+                    await cache.ensure_cached(self.cache_dir, entry)
             recordings = [
                 _load_cached_recording(self.cache_dir, entry) for entry in command.recordings or []
             ]
@@ -223,20 +234,30 @@ class AgentRuntime:
             return {"status": status}
         raise ValueError(f"unhandled command kind {kind!r}")
 
-    async def _handle(self, msg: Msg) -> None:
-        command = AgentCommand.model_validate_json(msg.data)
+    async def handle_command(self, command: AgentCommand) -> AgentAck:
+        """Dispatches one command to the adapter and builds its ACK.
+
+        The single entry point both ingress paths call (ADR-019, M19a): the
+        NATS path (`_handle`, below) and `agents.common.local_api`'s HTTP
+        path call this directly, so command semantics never fork per
+        transport.
+        """
         try:
             result = await self._dispatch(command)
-            ack = AgentAck(
+            return AgentAck(
                 correlation_id=command.correlation_id, sequence=command.sequence, **result
             )
         except (AdapterOperationError, cache.CacheVerificationError) as exc:
-            ack = AgentAck(
+            return AgentAck(
                 correlation_id=command.correlation_id,
                 sequence=command.sequence,
                 accepted=False,
                 error=str(exc),
             )
+
+    async def _handle(self, msg: Msg) -> None:
+        command = AgentCommand.model_validate_json(msg.data)
+        ack = await self.handle_command(command)
         if msg.reply:
             await msg.respond(ack.model_dump_json().encode())
 
@@ -294,8 +315,17 @@ class AgentRuntime:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=WATCHDOG_POLL_INTERVAL_SECONDS)
 
-    async def run(self, nc: NATSClient, stop: asyncio.Event) -> None:
-        """Runs until `stop` is set."""
+    async def run(self, nc: NATSClient | None, stop: asyncio.Event) -> None:
+        """Runs until `stop` is set.
+
+        `nc` is `None` when this process has no live control-plane
+        connection (ADR-019, M19a: `ROGUE_AGENT_INGRESS=local` with NATS
+        unreachable) — the watchdog loop and any local-API command handling
+        still run; only the NATS command subscription and presence/
+        telemetry publishing are skipped, since both need a broker to talk
+        to. `main.py` decides ingress mode; this method just tolerates
+        either.
+        """
         # Refresh from the adapter's own discover() before the first presence
         # publish — CLAUDE.md rule 10: runtime discovery is authoritative, not
         # whatever static slice main.py constructed this runtime with. A no-op
@@ -304,17 +334,18 @@ class AgentRuntime:
         # hardware's actual reported ranges. Left as the constructor-supplied
         # value if discover() comes back empty, rather than wiping to nothing.
         self.capabilities = await self.adapter.discover() or self.capabilities
-        subscription = await nc.subscribe(agent_command_subject(self.agent_id))
-        tasks = [
-            asyncio.create_task(self._command_loop(subscription)),
-            asyncio.create_task(self._presence_loop(nc, stop)),
-            asyncio.create_task(self._telemetry_loop(nc, stop)),
-            asyncio.create_task(self._watchdog_loop(stop)),
-        ]
+        subscription = None
+        tasks = [asyncio.create_task(self._watchdog_loop(stop))]
+        if nc is not None:
+            subscription = await nc.subscribe(agent_command_subject(self.agent_id))
+            tasks.append(asyncio.create_task(self._command_loop(subscription)))
+            tasks.append(asyncio.create_task(self._presence_loop(nc, stop)))
+            tasks.append(asyncio.create_task(self._telemetry_loop(nc, stop)))
         try:
             await stop.wait()
         finally:
-            await subscription.unsubscribe()
+            if subscription is not None:
+                await subscription.unsubscribe()
             for task in tasks:
                 task.cancel()
             for task in tasks:

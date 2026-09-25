@@ -156,6 +156,21 @@ Allocate logical emissions based on:
 
 Prefer stable assignments for intra-band changes. Permit migration for band changes. Actual allocation is evidence and belongs in the immutable run manifest.
 
+**Planned (M19d, ADR-019):** `rogue/compiler/allocation.py`'s
+`_channel_fits` currently checks only a single channel's own bandwidth and
+tunable range — confirmed absent are (a) shared-LO channel pairing (two
+channels on one physical LO, e.g. AIR7311 TX0/TX1, must fit inside one
+common LO passband simultaneously — unrelated to the existing
+`coherent_group_id`, ADR-012/013, which instead forces *distinct* channels
+for multi-receiver fan-out of one signal), (b) an
+`occupied_bandwidth_hz`/`transition_margin_hz` split against
+`max_usable_bandwidth_hz`, and (c) a gain/attenuation safety ceiling
+(today's only gain value anywhere is `agents/common/sdr_adapter_base.
+DEFAULT_GAIN_DB = 0.0`, hardcoded, with no scenario/site-policy input).
+ADR-019 adds an `lo_groups` declaration on `HardwareCapabilityProfile`
+with an atomic-pair allocation check, the bandwidth-margin split, and a
+gain-safety `CompilerFinding` threaded through to the adapter.
+
 ## 9. Independent RF validation
 
 RF Validation & Monitoring is independent of the replay command path. Compare measured/captured output against the Replay Plan for occupied frequency, bandwidth, timing, relative power, overlap and synchronization quality. Attach validation results and evidence to the ScenarioRun.

@@ -133,6 +133,55 @@ async def test_preflight_downloads_every_referenced_recording(
     assert seen == [entry]
 
 
+async def test_preflight_uses_the_local_recording_source_when_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR-019, M19b: a runtime constructed with `local_recording_root` set
+    must resolve PREFLIGHT recordings from there, not MinIO — the only
+    thing that forks per source (`agent.py`'s docstring on the field).
+    """
+    from agents.common import local_recording_source
+
+    runtime = AgentRuntime(
+        agent_id="sim-agent-test",
+        capabilities=[],
+        cache_dir=tmp_path / "cache",
+        local_recording_root=tmp_path / "local-root",
+    )
+    seen: list[tuple[Path, RecordingCacheEntry]] = []
+
+    async def fake_local_ensure_cached(
+        local_root: Path, cache_dir: Path, entry: RecordingCacheEntry
+    ) -> None:
+        seen.append((local_root, entry))
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache.meta_path_for(cache_dir, entry.recording_id, entry.version).write_text(
+            '{"global": {"core:datatype": "cf32_le", "core:sample_rate": 1000000}}'
+        )
+        cache.data_path_for(cache_dir, entry.recording_id, entry.version).write_bytes(
+            b"\x00" * 8 * 10
+        )
+
+    async def fail_if_called(cache_dir: Path, entry: RecordingCacheEntry) -> None:
+        raise AssertionError("MinIO cache.ensure_cached must not be called in local mode")
+
+    monkeypatch.setattr(local_recording_source, "ensure_cached", fake_local_ensure_cached)
+    monkeypatch.setattr(cache, "ensure_cached", fail_if_called)
+    entry = RecordingCacheEntry(
+        recording_id=uuid4(),
+        version=1,
+        metadata_object_key="k.sigmf-meta",
+        data_object_key="k.sigmf-data",
+        sha256_metadata="a" * 64,
+        sha256_data="b" * 64,
+    )
+    command = _command(AgentCommandKind.PREFLIGHT, window=_window(), recordings=[entry])
+
+    await runtime._dispatch(command)
+
+    assert seen == [(tmp_path / "local-root", entry)]
+
+
 async def test_preflight_builds_iq_recording_from_cached_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -303,3 +352,27 @@ async def test_run_refreshes_capabilities_from_discover_before_first_presence(
 
     assert len(runtime.capabilities) == 1
     assert runtime.capabilities[0].max_usable_bandwidth_hz == 400e6
+
+
+# --- nc=None (ADR-019, M19a: local-only ingress, no control-plane connection) ---
+
+
+async def test_run_with_no_nats_still_runs_the_watchdog_and_serves_commands(
+    tmp_path: Path,
+) -> None:
+    """`ROGUE_AGENT_INGRESS=local` with NATS unreachable passes `nc=None` —
+    `run()` must not subscribe/publish anywhere, but the watchdog must still
+    catch an armed channel gone stale, and `handle_command` (what
+    `local_api.py` calls) must keep working concurrently.
+    """
+    runtime = _runtime(tmp_path)
+    stop = asyncio.Event()
+    run_task = asyncio.create_task(runtime.run(None, stop))
+    try:
+        command = _command(AgentCommandKind.RESERVE, run_id=uuid4(), lease_ttl_seconds=30.0)
+        ack = await runtime.handle_command(command)
+        assert ack.accepted is True
+        assert (DEVICE, CHANNEL) in runtime._contacts
+    finally:
+        stop.set()
+        await run_task

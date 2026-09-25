@@ -66,3 +66,22 @@ At minimum test:
 - Agent disconnect causes watchdog stop and FAILED/ABORTED according to policy with complete evidence.
 - Same immutable version/recordings can be rerun and compared.
 - Real SDR performs only explicitly gated cabled/attenuated replay and emergency stop is verified.
+
+## 7. Conducted loop-test suite (AIR7311)
+
+**Planned (M19e, ADR-019):** three explicit, non-interchangeable cabled
+topologies for the hardware-adapter/HIL layers above, each a
+version-controlled scenario fixture with a versioned pass/fail threshold
+set and required RX-safe-level/link-budget calculation before TX:
+1. one TX → fixed attenuator(s) → one RX — baseline channel/routing matrix
+   (all required TX/RX pairings for the test campaign).
+2. one TX → 1:4 splitter → four RX — simultaneous four-channel RX
+   consistency (gain/phase/delay/sample continuity across channels).
+3. TX1–TX4 → 4:1 combiner → one RX — simultaneous four-channel TX,
+   composite spectrum, coherent-worst-case combiner-power validation (must
+   not rely on the nominal single-port combiner loss as RX protection when
+   channels may carry correlated waveforms).
+
+Every topology requires per-port passive-device losses and a configured
+safe RX limit declared before TX; the controller refuses to prepare a run
+missing a complete link-budget declaration.

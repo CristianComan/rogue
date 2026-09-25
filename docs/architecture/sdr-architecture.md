@@ -18,6 +18,27 @@ The Agent:
 
 SoapyRemote may be used for diagnostics, but is not the production orchestration abstraction.
 
+**Implemented (M19a/M19b, ADR-019):** before this, the Agent process had
+exactly one command ingress (NATS) and blocked on `nats.connect()` before it
+would even start — so it could not run at all, let alone honor "watchdog and
+fail-safe stop independent of control-plane availability" above, if NATS was
+unreachable. `ROGUE_AGENT_INGRESS=local`/`both` starts a second, equally
+first-class local HTTP command ingress (`agents/common/local_api.py`) and no
+longer blocks startup on NATS reachability; `ROGUE_AGENT_LOCAL_RECORDING_ROOT`
+(`agents/common/local_recording_source.py`) resolves PREFLIGHT's recordings
+from a local SigMF root instead of MinIO. Together these let a
+previously-validated replay run from a local command with no control plane
+(NATS, MinIO, the database) reachable at all, terminating in the same
+`AgentRuntime` handlers and the same adapter/watchdog — not a second Agent
+implementation. See **Manual verification guide, §M19** for the exact
+commands. The local API is plain HTTP, not HTTPS — it is bound to loopback
+by default (`ROGUE_AGENT_LOCAL_API_HOST`), matching item 1's "loopback/
+management-interface only" scope; binding it to a non-loopback management
+interface without adding TLS in front of it is a deployment misconfiguration,
+not something this ingress defends against on its own. `scripts/sdrctl`
+(M19c, a CLI over this API) and the compiler `lo_groups`/bandwidth/gain-
+ceiling additions (M19d) remain planned.
+
 ## 2. Vendor-neutral adapter contract
 
 Conceptual interface:
@@ -85,6 +106,18 @@ Versioned commands include:
 
 Every command/ACK includes correlation ID, sequence, timestamps, state and structured errors. Commands are idempotent, expire, and are rejected when stale or outside an active lease.
 
+**Implemented (M19a, ADR-019):** `agents/common/local_api.py` exposes
+`POST /commands`, translating an `AgentCommand` request body directly into
+the same `AgentRuntime.handle_command` call the NATS path's `_handle`
+already uses — the command model above does not fork per ingress; a
+request's `correlation_id` is the same field the NATS path's idempotency
+handling already keys on, no new mapping needed. `main.py`'s NATS connect
+becomes non-blocking (a bounded 5s best-effort attempt, then `nc=None`)
+under `ROGUE_AGENT_INGRESS=local`/`both` so a control-plane outage cannot
+prevent the Agent from starting or serving local commands; `AgentRuntime.run`
+skips NATS subscribe/presence/telemetry when `nc` is `None` but still runs
+the watchdog loop unconditionally.
+
 **Implemented (M8, ADR-008):** `backend/rogue/protocol/messages.py` defines
 `AgentCommand`/`AgentAck` (plus `AgentPresence`/`AgentTelemetry`) as the
 concrete versioned shapes above; `subjects.py` gives each Agent its own
@@ -111,6 +144,20 @@ A run declares required synchronization class/tolerance. The system must not pro
 ## 6. Local caching and streaming
 
 I/Q is prefetched before a run, checksum-verified and replayed from local storage. Streaming uses bounded buffers; no full-file RAM load. The control network is not the sample transport path.
+
+**Implemented (M19b, ADR-019):** before this, the only recording source
+(`agents/common/cache.py`) fetched from MinIO — PREFLIGHT could not proceed
+without it reachable either, even under local command ingress.
+`agents/common/local_recording_source.py` adds a local-SigMF-root
+alternative (`ROGUE_AGENT_LOCAL_RECORDING_ROOT`, symlinking a hash-verified
+pair into the existing `cache_dir` rather than copying — a `.sigmf-data`
+file can be many gigabytes), rejecting a missing metadata/data pair, a data
+hash that doesn't match the pinned `sha256_data` (raised as the same
+`cache.CacheVerificationError` the NATS path's exception handling already
+knows about), and path traversal/symlink escape outside the configured
+root. `agent.py`'s PREFLIGHT handling picks the source by whether
+`AgentRuntime.local_recording_root` is set; everything downstream
+(`_load_cached_recording`, the adapter itself) does not fork per source.
 
 ## 7. Safety
 
@@ -145,6 +192,10 @@ transmitter and never touches the device otherwise. This is a local,
 per-Agent-host interlock, separate from the compiler's
 `SafetyPolicyOutcome.tx_authorized` (still a structural placeholder; a
 full policy engine is a separate, later concern).
+
+**Planned (M19c, ADR-019):** `scripts/emergency_stop.py` — local-only, no
+auth, calls the local API's abort endpoint or, failing that, the adapter's
+abort path directly. Independent of local command ingress landing at all.
 
 ## 8. Simulation first
 
