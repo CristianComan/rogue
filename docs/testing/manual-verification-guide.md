@@ -1,4 +1,4 @@
-# Checking ROGUE yourself — manual verification guide (M0–M19b, M17/M18 partial)
+# Checking ROGUE yourself — manual verification guide (M0–M20b, M17/M18 partial)
 
 A hands-on walkthrough for verifying what's been built, without having to
 read the code. Run each block from the repo root
@@ -14,7 +14,9 @@ script (superseded by automated test coverage; the script itself is still
 in this file's git history if you need it). If you're just trying to run
 the app, start with **Quick start** below and stop there; the rest is
 milestone-by-milestone verification detail for when you need to check a
-specific piece. (2026-09-25: added M19a/M19b.)
+specific piece. (2026-09-25: added M20a/M20b. 2026-10-05: added M19,
+renumbered the previous M19a/M19b addition to M20a/M20b to make room for
+it — see ADR-020's note on the collision.)
 
 ## Quick start: start, use, stop
 
@@ -112,7 +114,8 @@ hands the port back to the container when you're done.
 | M16 | Zone-trigger compiler integration | `zone_trigger` emissions resolve to real `RfWindow`/`CompositeChannel` output (ADR-016) |
 | M17 | Zone-trigger overlap detection (**partial**) | The two statically-provable overlap cases are BLOCKING findings; zone-trigger-vs-manually-timed overlap still open (ADR-017) |
 | M18 | Zone polygon-overlap detection | Cross-zone geometric overlap closed; zone-trigger-vs-manually-timed overlap still needs a validation-time `duration_s`, not attempted (ADR-018) |
-| M19a/M19b | Agent local command ingress + local recording source | Done (ADR-019). `ROGUE_AGENT_INGRESS=local`/`both` + `ROGUE_AGENT_LOCAL_RECORDING_ROOT` let a previously-validated replay run against a real Agent with no control plane (NATS/MinIO/DB) reachable. M19c (`sdrctl`, `emergency_stop.py`), M19d (compiler `lo_groups`/gain-ceiling) and M19e (loop-test suite) not yet built. |
+| M19 | Manual replay CLI | Done (ADR-019). `rogue-manual-replay` (`agents/cli/manual_replay.py`) drives one real SDR channel by hand (reserve/preflight/configure/arm/start/stop) from a local SigMF recording + YAML config — no Postgres/MinIO/NATS/scenario. **Hardware-unverified** in this dev environment. See also `replay_cli/` (supplemental, independent tool — not the same thing, see ADR-019's note). |
+| M20a/M20b | Agent local command ingress + local recording source | Done (ADR-020, renumbered from ADR-019 to avoid colliding with M19 above). `ROGUE_AGENT_INGRESS=local`/`both` + `ROGUE_AGENT_LOCAL_RECORDING_ROOT` let a previously-validated replay run against a real Agent with no control plane (NATS/MinIO/DB) reachable. M20c (`sdrctl`, `emergency_stop.py`), M20d (compiler `lo_groups`/gain-ceiling) and M20e (loop-test suite) not yet built. |
 
 Plus a UI overhaul (Replay page, SDR Console page, restructured Development
 page) and a Replay/SDR Console frontend layer sitting on top of the above —
@@ -207,7 +210,8 @@ pytest tests/unit/agents tests/unit/protocol tests/unit/persistence/test_agent_r
 pytest tests/unit/domain/test_geometry.py tests/unit/domain/test_mission_evaluator.py tests/unit/compiler/test_coherent_groups.py -v   # M11-M13 new modules
 pytest tests/unit/validation tests/unit/persistence/test_run_validation_persistence.py -v     # M14
 pytest tests/unit/domain/test_validation.py tests/unit/domain/test_rf.py tests/unit/compiler/test_windows.py tests/unit/spectrum/test_occupancy.py -v   # M15-M18 — share files with earlier domain/compiler/spectrum work, not split by milestone
-pytest tests/unit/agents/test_local_api.py tests/unit/agents/test_local_recording_source.py -v   # M19a/M19b
+pytest tests/unit/agents/test_manual_replay_cli.py -v   # M19
+pytest tests/unit/agents/test_local_api.py tests/unit/agents/test_local_recording_source.py -v   # M20a/M20b
 ```
 
 Frontend checks, from `frontend/`:
@@ -777,9 +781,100 @@ For zone-trigger emissions and overlap, build the RF link interactively
 reference) — see ADR-016/ADR-017/ADR-018 for the exact field shapes if
 you'd rather construct the request body directly.
 
-## M19a/M19b — Agent local command mode (no control plane at all)
+## M19 — Manual replay CLI
 
-ADR-019: a second, equally first-class command ingress and recording source
+**Unverified against real hardware in this dev environment**, same
+constraint as M9/M10 — command sequencing, the real-TX gate, local-file
+staging, and both interactive-session emergency-stop paths are covered by
+`pytest tests/unit/agents/test_manual_replay_cli.py` against fake device
+seams; the lab run below is the actual hardware path. See ADR-019.
+
+**Safety first.** `ROGUE_ENABLE_REAL_TX=1` is a real transmit-enable
+switch (CLAUDE.md rule 12) — cabled/attenuated loopback only. The
+adapter's real analog TX gain is fixed at 0 dB (`DEFAULT_GAIN_DB`, ADR-019)
+regardless of the config's `gain_offset_db` (a software sample scale, not
+device gain) — size attenuation for the fixed 0 dB, not for that field.
+
+Install once per host — same `pip install` either family already uses,
+plus that device's own bindings (ADR-009/ADR-010/`deployment.md` §7):
+
+```bash
+pip install -e ".[x440]"   # X440 host: needs the uhd package
+pip install -e .           # AIR7311/AIR7201/AIR8201 host: needs SoapySDR's
+                            # separately-provisioned Python bindings
+rogue-manual-replay --help
+```
+
+Both commands below need a real `cf32_le` `.sigmf-data`/`.sigmf-meta` pair
+on that host (e.g. anything ingested via `scripts/ingest_drone_corpus.py`,
+copied locally) — substitute its path in `recordings[0].path`.
+
+### X440 (networked — `addr=`)
+
+```yaml
+# x440.yaml
+device_family: x440
+device_args: "addr=<your X440's address>"    # confirm via `uhd_find_devices`
+device_id: bench-x440
+channel_index: 0
+center_frequency_hz: 2412000000
+bandwidth_hz: 20000000
+recordings:
+  - path: /path/to/your/recording.sigmf-data
+```
+
+### AIR7311 / AIR7201 / AIR8201 (local — `driver=`)
+
+```yaml
+# air7311.yaml
+device_family: air7311
+device_args: "driver=SoapyAIRT"   # confirm via `SoapySDRUtil --find` (ADR-010) —
+                                   # the exact string for this unit's model
+device_id: bench-air7311
+channel_index: 0
+center_frequency_hz: 2412000000
+bandwidth_hz: 20000000
+recordings:
+  - path: /path/to/your/recording.sigmf-data
+```
+
+### Running either config
+
+One-shot cycle, auto-stops after 5s — confirm on your analyzer that TX
+begins after "transmitting on ..." prints and stops cleanly at 5s:
+
+```bash
+ROGUE_ENABLE_REAL_TX=1 rogue-manual-replay <config.yaml> run --duration-seconds 5
+```
+
+Confirm the safety gate actually gates — must fail fast with
+`RealTxNotAuthorizedError`, no TX at all:
+
+```bash
+rogue-manual-replay <config.yaml> run --duration-seconds 5   # no ROGUE_ENABLE_REAL_TX
+```
+
+Interactive step-by-step control — the actual bring-up workflow, checking
+the analyzer between steps:
+
+```bash
+ROGUE_ENABLE_REAL_TX=1 rogue-manual-replay <config.yaml> interactive
+> discover     # confirm real device-discovered ranges, not a static default
+> prepare
+> arm
+> start
+   # check the analyzer
+> stop
+> quit
+```
+
+Confirm `Ctrl+C` at any point during `start` still leaves the channel not
+transmitting afterward (the session's safety-net `emergency_stop`). Run
+both configs. Report back anything that needed adjusting.
+
+## M20a/M20b — Agent local command mode (no control plane at all)
+
+ADR-020: a second, equally first-class command ingress and recording source
 for the Agent process, so a previously-validated replay can run with **no
 NATS, no MinIO, no Postgres, no ROGUE backend running at all** — everything
 below deliberately never touches `docker compose` or `localhost:8000`.
@@ -790,12 +885,12 @@ pytest tests/unit/agents/test_local_api.py tests/unit/agents/test_local_recordin
 
 **The driver script** below talks to the Agent's local API directly
 (`POST /commands`, `GET /health`) and works unmodified against *any* Agent
-mode — `simulated`, `x440`, or `air7311` — since M19a/M19b terminate in the
+mode — `simulated`, `x440`, or `air7311` — since M20a/M20b terminate in the
 exact same `AgentRuntime` handlers the NATS path uses; only which process
 you start against it changes.
 
 ```python
-# save as /tmp/run_m19_local_replay.py
+# save as /tmp/run_m20_local_replay.py
 """Drives one full reserve->preflight->configure->arm->start->stop cycle
 against an Agent's local command API with no control plane involved."""
 import argparse, hashlib, json, struct, sys, time, uuid
@@ -880,7 +975,7 @@ confirmed by actually running this with no NATS broker up at all: a
 `ConnectionRefusedError` is logged as a warning, then startup continues).
 
 ```bash
-python /tmp/run_m19_local_replay.py --local-root /tmp/rogue-local-recordings --device-id sim-1 --duration-s 2
+python /tmp/run_m20_local_replay.py --local-root /tmp/rogue-local-recordings --device-id sim-1 --duration-s 2
 kill %1   # SIGTERM triggers the Agent's normal shutdown path
 ```
 Expect every command to print `accepted=True`, ending with `stop:
@@ -909,16 +1004,16 @@ either. Confirm it starts and registers the real device's discovered
 capabilities, then in another shell:
 
 ```bash
-python /tmp/run_m19_local_replay.py --local-root /tmp/rogue-local-recordings --freq-hz 2.45e9 --duration-s 3
+python /tmp/run_m20_local_replay.py --local-root /tmp/rogue-local-recordings --freq-hz 2.45e9 --duration-s 3
 ```
 Expect `start: accepted=False` with an error mentioning the real-TX gate —
-confirms M19's local path enforces the exact same safety interlock as the
+confirms M20's local path enforces the exact same safety interlock as the
 NATS path (ADR-009), not a second, weaker one. Stop the Agent, restart with
 `ROGUE_ENABLE_REAL_TX=1`, re-run the script: expect all steps
 `accepted=True` and real, attenuated TX visible on the analyzer for the
 `--duration-s` window.
 
-**Emergency stop, by hand** (M19c's `scripts/emergency_stop.py` isn't built
+**Emergency stop, by hand** (M20c's `scripts/emergency_stop.py` isn't built
 yet — until it is, this is the interim one-liner, hit during a `start`):
 ```bash
 curl -s -X POST http://127.0.0.1:8600/commands -H "Content-Type: application/json" \
