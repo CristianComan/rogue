@@ -69,7 +69,7 @@ At minimum test:
 
 ## 7. Conducted loop-test suite (AIR7311)
 
-**Planned (M19e, ADR-019):** three explicit, non-interchangeable cabled
+**Planned (M20e, ADR-020):** three explicit, non-interchangeable cabled
 topologies for the hardware-adapter/HIL layers above, each a
 version-controlled scenario fixture with a versioned pass/fail threshold
 set and required RX-safe-level/link-budget calculation before TX:

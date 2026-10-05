@@ -18,7 +18,7 @@ The Agent:
 
 SoapyRemote may be used for diagnostics, but is not the production orchestration abstraction.
 
-**Implemented (M19a/M19b, ADR-019):** before this, the Agent process had
+**Implemented (M20a/M20b, ADR-020):** before this, the Agent process had
 exactly one command ingress (NATS) and blocked on `nats.connect()` before it
 would even start — so it could not run at all, let alone honor "watchdog and
 fail-safe stop independent of control-plane availability" above, if NATS was
@@ -30,14 +30,14 @@ from a local SigMF root instead of MinIO. Together these let a
 previously-validated replay run from a local command with no control plane
 (NATS, MinIO, the database) reachable at all, terminating in the same
 `AgentRuntime` handlers and the same adapter/watchdog — not a second Agent
-implementation. See **Manual verification guide, §M19** for the exact
+implementation. See **Manual verification guide, §M20** for the exact
 commands. The local API is plain HTTP, not HTTPS — it is bound to loopback
 by default (`ROGUE_AGENT_LOCAL_API_HOST`), matching item 1's "loopback/
 management-interface only" scope; binding it to a non-loopback management
 interface without adding TLS in front of it is a deployment misconfiguration,
 not something this ingress defends against on its own. `scripts/sdrctl`
-(M19c, a CLI over this API) and the compiler `lo_groups`/bandwidth/gain-
-ceiling additions (M19d) remain planned.
+(M20c, a CLI over this API) and the compiler `lo_groups`/bandwidth/gain-
+ceiling additions (M20d) remain planned.
 
 ## 2. Vendor-neutral adapter contract
 
@@ -106,7 +106,7 @@ Versioned commands include:
 
 Every command/ACK includes correlation ID, sequence, timestamps, state and structured errors. Commands are idempotent, expire, and are rejected when stale or outside an active lease.
 
-**Implemented (M19a, ADR-019):** `agents/common/local_api.py` exposes
+**Implemented (M20a, ADR-020):** `agents/common/local_api.py` exposes
 `POST /commands`, translating an `AgentCommand` request body directly into
 the same `AgentRuntime.handle_command` call the NATS path's `_handle`
 already uses — the command model above does not fork per ingress; a
@@ -145,7 +145,7 @@ A run declares required synchronization class/tolerance. The system must not pro
 
 I/Q is prefetched before a run, checksum-verified and replayed from local storage. Streaming uses bounded buffers; no full-file RAM load. The control network is not the sample transport path.
 
-**Implemented (M19b, ADR-019):** before this, the only recording source
+**Implemented (M20b, ADR-020):** before this, the only recording source
 (`agents/common/cache.py`) fetched from MinIO — PREFLIGHT could not proceed
 without it reachable either, even under local command ingress.
 `agents/common/local_recording_source.py` adds a local-SigMF-root
@@ -193,7 +193,7 @@ per-Agent-host interlock, separate from the compiler's
 `SafetyPolicyOutcome.tx_authorized` (still a structural placeholder; a
 full policy engine is a separate, later concern).
 
-**Planned (M19c, ADR-019):** `scripts/emergency_stop.py` — local-only, no
+**Planned (M20c, ADR-020):** `scripts/emergency_stop.py` — local-only, no
 auth, calls the local API's abort endpoint or, failing that, the adapter's
 abort path directly. Independent of local command ingress landing at all.
 

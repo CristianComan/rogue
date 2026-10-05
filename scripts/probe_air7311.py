@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Read-only AIR7311 capability probe. No TX. No RX stream. No writeStream.
 
-Standalone by design (ADR-019, M19a Phase-0 spike): imports only `SoapySDR`,
+Standalone by design (ADR-020, M20a Phase-0 spike): imports only `SoapySDR`,
 not the `rogue`/`agents` packages, so it runs with whatever system Python has
 the vendor bindings (see ADR-010/ADR-011 — SoapySDR's Python module is not a
 normal pip package and is usually only importable from the system

@@ -156,7 +156,7 @@ Allocate logical emissions based on:
 
 Prefer stable assignments for intra-band changes. Permit migration for band changes. Actual allocation is evidence and belongs in the immutable run manifest.
 
-**Planned (M19d, ADR-019):** `rogue/compiler/allocation.py`'s
+**Planned (M20d, ADR-020):** `rogue/compiler/allocation.py`'s
 `_channel_fits` currently checks only a single channel's own bandwidth and
 tunable range — confirmed absent are (a) shared-LO channel pairing (two
 channels on one physical LO, e.g. AIR7311 TX0/TX1, must fit inside one
@@ -167,7 +167,7 @@ for multi-receiver fan-out of one signal), (b) an
 `max_usable_bandwidth_hz`, and (c) a gain/attenuation safety ceiling
 (today's only gain value anywhere is `agents/common/sdr_adapter_base.
 DEFAULT_GAIN_DB = 0.0`, hardcoded, with no scenario/site-policy input).
-ADR-019 adds an `lo_groups` declaration on `HardwareCapabilityProfile`
+ADR-020 adds an `lo_groups` declaration on `HardwareCapabilityProfile`
 with an atomic-pair allocation check, the bandwidth-margin split, and a
 gain-safety `CompilerFinding` threaded through to the adapter.
 

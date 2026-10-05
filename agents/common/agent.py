@@ -115,7 +115,7 @@ class AgentRuntime:
         self.mode = mode
         self.capabilities = capabilities
         self.cache_dir = cache_dir
-        # ADR-019, M19b: when set, PREFLIGHT resolves recordings from this
+        # ADR-020, M20b: when set, PREFLIGHT resolves recordings from this
         # local SigMF root instead of MinIO — the only thing that forks per
         # source; everything downstream (`_load_cached_recording`, the
         # adapter itself) reads `cache_dir` exactly the same either way.
@@ -237,7 +237,7 @@ class AgentRuntime:
     async def handle_command(self, command: AgentCommand) -> AgentAck:
         """Dispatches one command to the adapter and builds its ACK.
 
-        The single entry point both ingress paths call (ADR-019, M19a): the
+        The single entry point both ingress paths call (ADR-020, M20a): the
         NATS path (`_handle`, below) and `agents.common.local_api`'s HTTP
         path call this directly, so command semantics never fork per
         transport.
@@ -319,7 +319,7 @@ class AgentRuntime:
         """Runs until `stop` is set.
 
         `nc` is `None` when this process has no live control-plane
-        connection (ADR-019, M19a: `ROGUE_AGENT_INGRESS=local` with NATS
+        connection (ADR-020, M20a: `ROGUE_AGENT_INGRESS=local` with NATS
         unreachable) — the watchdog loop and any local-API command handling
         still run; only the NATS command subscription and presence/
         telemetry publishing are skipped, since both need a broker to talk

@@ -1,4 +1,4 @@
-"""Tests for the local HTTP command ingress (ADR-019, M19a): a request must
+"""Tests for the local HTTP command ingress (ADR-020, M20a): a request must
 produce exactly the same ACK `agent.py`'s NATS path already produces for the
 same `AgentCommand`, since `local_api.py` is a transport adapter over
 `AgentRuntime.handle_command`, not a second set of command semantics.

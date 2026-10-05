@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Manual, single-channel TX->RX cabled loopback sanity test for the AIR7311.
 
-Standalone by design (ADR-019 Phase-0 spike, same reasoning as
+Standalone by design (ADR-020 Phase-0 spike, same reasoning as
 probe_air7311.py): only imports SoapySDR + numpy, runs under system
 python3, no rogue/agents package dependency.
 

@@ -1,4 +1,4 @@
-"""Local HTTP command ingress for the Agent process (ADR-019, M19a).
+"""Local HTTP command ingress for the Agent process (ADR-020, M20a).
 
 A second, equally first-class command ingress alongside the NATS path
 (`sdr-architecture.md` §4): `submit_command` below translates a request

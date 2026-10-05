@@ -1,4 +1,4 @@
-"""Local-SigMF-root recording source for the Agent (ADR-019, M19b).
+"""Local-SigMF-root recording source for the Agent (ADR-020, M20b).
 
 An alternative to `agents/common/cache.py`'s MinIO fetch, for PREFLIGHT when
 the control plane (and MinIO with it) is unreachable: resolves a recording

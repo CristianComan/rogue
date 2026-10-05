@@ -8,14 +8,14 @@ compose.yml runs two Agent instances with disjoint slices, so the control
 plane's device_id->agent_id registry lookup is actually exercised rather
 than always resolving to the only agent that exists).
 
-``ROGUE_AGENT_INGRESS`` (ADR-019, M19a) selects the command ingress(es):
+``ROGUE_AGENT_INGRESS`` (ADR-020, M20a) selects the command ingress(es):
 ``nats`` (default, unchanged) blocks on ``nats.connect()`` before this
-process does anything else, exactly as before M19. ``local``/``both`` start
+process does anything else, exactly as before M20. ``local``/``both`` start
 ``agents.common.local_api``'s HTTP ingress and never block startup on NATS
 reachability — a control-plane outage must not prevent a previously-
 validated replay from running locally.
 
-``ROGUE_AGENT_LOCAL_RECORDING_ROOT`` (ADR-019, M19b), if set, resolves
+``ROGUE_AGENT_LOCAL_RECORDING_ROOT`` (ADR-020, M20b), if set, resolves
 PREFLIGHT's recordings from that local SigMF root
 (``agents.common.local_recording_source``) instead of MinIO — the other
 half of running a replay with no control plane reachable at all.
@@ -57,7 +57,7 @@ def _capabilities_for_devices(device_ids: set[str]) -> list[PhysicalTxChannelCap
 
 async def _connect_nats_best_effort(nats_url: str, agent_id: str) -> NATSClient | None:
     """Attempts a bounded, non-fatal NATS connection for ``local``/``both``
-    ingress (ADR-019 item 4) — returns ``None`` instead of raising so a
+    ingress (ADR-020 item 4) — returns ``None`` instead of raising so a
     control-plane outage cannot prevent this process from starting or
     serving local commands.
     """
@@ -110,7 +110,7 @@ async def run() -> None:
 
     nc: NATSClient | None
     if ingress == "nats":
-        # Unchanged from before M19: NATS is the only ingress, so an
+        # Unchanged from before M20: NATS is the only ingress, so an
         # unreachable control plane must prevent this process from starting.
         nc = await nats.connect(nats_url)
     else:

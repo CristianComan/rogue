@@ -1,4 +1,4 @@
-"""Tests for the local-SigMF-root recording source (ADR-019, M19b): a
+"""Tests for the local-SigMF-root recording source (ADR-020, M20b): a
 hash-verified recording under a configured local root must become readable
 through `cache.py`'s own `meta_path_for`/`data_path_for(cache_dir, ...)` —
 the exact contract `agent.py`'s `_load_cached_recording` depends on,

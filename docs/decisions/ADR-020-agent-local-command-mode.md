@@ -1,8 +1,8 @@
-# ADR-019: Agent Local Command Mode (M19)
+# ADR-020: Agent Local Command Mode (M20)
 
-**Status:** Accepted. M19a (local HTTP ingress) and M19b (local recording
-source) are implemented; M19c (`sdrctl`/`emergency_stop.py`), M19d (compiler
-`lo_groups`/bandwidth/gain-ceiling additions) and M19e (conducted loop-test
+**Status:** Accepted. M20a (local HTTP ingress) and M20b (local recording
+source) are implemented; M20c (`sdrctl`/`emergency_stop.py`), M20d (compiler
+`lo_groups`/bandwidth/gain-ceiling additions) and M20e (conducted loop-test
 suite) remain outstanding, tracked independently per the Consequences
 section below.
 
@@ -162,7 +162,7 @@ layer forks.
   the NATS path already does per ADR-008 — the Agent has no catalogue
   access either way), but also bypasses MinIO; recordings must already be
   present under the configured local root before a run.
-- Milestones M19a–M19e (ingress + idempotent translation; local recording
+- Milestones M20a–M20e (ingress + idempotent translation; local recording
   source + scenario reuse; `sdrctl` + `emergency_stop.py` + acceptance test;
   compiler shared-LO/bandwidth/gain rules; conducted loop-test suite) are
   independently shippable feature branches off `develop`, each with its own

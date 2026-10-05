@@ -136,7 +136,7 @@ async def test_preflight_downloads_every_referenced_recording(
 async def test_preflight_uses_the_local_recording_source_when_configured(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """ADR-019, M19b: a runtime constructed with `local_recording_root` set
+    """ADR-020, M20b: a runtime constructed with `local_recording_root` set
     must resolve PREFLIGHT recordings from there, not MinIO — the only
     thing that forks per source (`agent.py`'s docstring on the field).
     """
@@ -354,7 +354,7 @@ async def test_run_refreshes_capabilities_from_discover_before_first_presence(
     assert runtime.capabilities[0].max_usable_bandwidth_hz == 400e6
 
 
-# --- nc=None (ADR-019, M19a: local-only ingress, no control-plane connection) ---
+# --- nc=None (ADR-020, M20a: local-only ingress, no control-plane connection) ---
 
 
 async def test_run_with_no_nats_still_runs_the_watchdog_and_serves_commands(
