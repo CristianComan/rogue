@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "replay-cli"
+version = "0.1.0"
+description = "SigMF Drone Replay Tool - manual, file-based signal injection for AIR-T 7311/7201 and Ettus X440"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "pydantic>=2.8,<3.0",
+  "pyyaml>=6.0,<7.0",
+  "numpy>=2.0,<3.0",
+  "scipy>=1.11,<2.0",
+  "matplotlib>=3.8,<4.0",
+  "sigmf>=1.13,<2.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9.0",
+  "ruff>=0.6,<1.0",
+  "mypy>=1.11,<2.0",
+  "types-PyYAML>=6.0,<7.0"
+]
+
+[project.scripts]
+replay = "replay_cli.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/replay_cli"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+# The installed numpy stubs use PEP 695 syntax requiring 3.12 to parse,
+# even though this project's own requires-python floor is 3.10 -- this
+# only affects how mypy parses/checks (dev-time only), not what Python
+# versions replay_cli itself runs on.
+python_version = "3.12"
+mypy_path = ["src"]
+# No type stubs for sigmf/SoapySDR; a best-effort check, not strict mode
+# (unlike the main ROGUE repo, which has py.typed deps throughout).
+ignore_missing_imports = true

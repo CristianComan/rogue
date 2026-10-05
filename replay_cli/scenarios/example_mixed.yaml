@@ -1,0 +1,25 @@
+# Synthetic example scenario, used only by the test suite: one drone
+# observed under three different geometries (drone-only, both, controller-only).
+name: example_mixed
+description: One drone observed under three different geometries.
+radio:
+  type: airt7311
+  channel: 0
+  center_mhz: 2440
+  rate_msps: 20
+  tx_gain_db: -10
+  max_tx_gain_db: -5
+  device_args: "driver=SoapyAIRT"
+events:
+  - drone: alpha
+    near: [drone]
+    start_s: 0
+    dur_s: 30
+  - drone: alpha
+    near: [drone, controller]
+    start_s: 30
+    dur_s: 60
+  - drone: alpha
+    near: [controller]
+    start_s: 90
+    dur_s: 30
