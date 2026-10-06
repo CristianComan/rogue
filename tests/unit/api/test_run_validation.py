@@ -114,9 +114,7 @@ def _compile_a_plan(client: TestClient) -> tuple[dict, dict]:
 
     scenario = _create_scenario(client)
     mission = _mission_with_recording(ingested["id"])
-    draft = _create_draft(
-        client, scenario["id"], missions=[mission], receivers=[MONITOR_RECEIVER]
-    )
+    draft = _create_draft(client, scenario["id"], missions=[mission], receivers=[MONITOR_RECEIVER])
     published = client.post(f"/scenarios/{scenario['id']}/drafts/{draft['id']}/publish")
     assert published.status_code == 201, published.text
     version = published.json()

@@ -13,7 +13,8 @@ const LEGACY_TONE_MAP: Record<BadgeTone, Tone> = {
 
 /** A small rounded status pill with a dot, matching the ROGUE Console canvas's tone system. */
 export function Badge({ tone, children }: { tone: BadgeTone | Tone; children: string }) {
-  const resolved: Tone = tone in LEGACY_TONE_MAP ? LEGACY_TONE_MAP[tone as BadgeTone] : (tone as Tone);
+  const resolved: Tone =
+    tone in LEGACY_TONE_MAP ? LEGACY_TONE_MAP[tone as BadgeTone] : (tone as Tone);
   const { fg, bg, bd } = toneVars(resolved);
   return (
     <span

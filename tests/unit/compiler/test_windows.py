@@ -313,9 +313,7 @@ def test_zone_triggered_emission_produces_window_only_during_crossing_interval()
         emissions=[RfEmission(recording=recording.reference(), zone_trigger=zone_trigger)],
     )
     mission = make_mission([link], trajectory=_STRAIGHT_LEG)
-    version = make_scenario_version(
-        [mission], [recording.reference()], zones=[_MID_LEG_ZONE]
-    )
+    version = make_scenario_version([mission], [recording.reference()], zones=[_MID_LEG_ZONE])
     recordings = {recording_key(recording.reference()): recording}
     profile = make_capability_profile()
 
@@ -345,9 +343,7 @@ def test_zone_triggered_emission_unsupported_template_is_blocking() -> None:
         emissions=[RfEmission(recording=recording.reference(), zone_trigger=zone_trigger)],
     )
     mission = make_mission([link], trajectory=unsupported_trajectory)
-    version = make_scenario_version(
-        [mission], [recording.reference()], zones=[_MID_LEG_ZONE]
-    )
+    version = make_scenario_version([mission], [recording.reference()], zones=[_MID_LEG_ZONE])
     recordings = {recording_key(recording.reference()): recording}
     profile = make_capability_profile()
 
@@ -384,9 +380,7 @@ def test_zone_triggered_emission_unresolvable_mission_surfaces_even_with_delayed
         start_policy=MissionStartPolicy.AT_TIME_OFFSET,
         start_time_offset=timedelta(seconds=50),
     )
-    version = make_scenario_version(
-        [mission], [recording.reference()], zones=[_MID_LEG_ZONE]
-    )
+    version = make_scenario_version([mission], [recording.reference()], zones=[_MID_LEG_ZONE])
     recordings = {recording_key(recording.reference()): recording}
     profile = make_capability_profile()
 

@@ -111,8 +111,7 @@ class RfEmission(IdentifiedMixin):
             )
         if self.start_offset != timedelta(0):
             raise ValueError(
-                "a zone-triggered emission's start is derived from zone crossings, not "
-                "start_offset"
+                "a zone-triggered emission's start is derived from zone crossings, not start_offset"
             )
         if self.loop:
             raise ValueError("a zone-triggered emission cannot also loop")

@@ -25,12 +25,24 @@ const SYNC_NOTES: { k: string; v: string }[] = [
 ];
 
 const COMPONENT_INDEX: { k: string; v: string }[] = [
-  { k: "NavRail", v: "Persistent 52px dark icon rail — page switch, theme toggle, row density toggle." },
-  { k: "Subnav", v: "Collapsible 206px secondary panel — page title + subsection list with counts." },
+  {
+    k: "NavRail",
+    v: "Persistent 52px dark icon rail — page switch, theme toggle, row density toggle.",
+  },
+  {
+    k: "Subnav",
+    v: "Collapsible 206px secondary panel — page title + subsection list with counts.",
+  },
   { k: "TopBar", v: "Breadcrumb + page commands, toggles Subnav via the hamburger button." },
   { k: "Card", v: "Bordered panel, optional label/actions header or a fully custom header row." },
-  { k: "Badge", v: "Rounded status pill with a dot, bound to the ok/warn/bad/info/mute tone system." },
-  { k: "CommandButton", v: "Dot+label top-bar action button — accent for the primary command, ghost otherwise." },
+  {
+    k: "Badge",
+    v: "Rounded status pill with a dot, bound to the ok/warn/bad/info/mute tone system.",
+  },
+  {
+    k: "CommandButton",
+    v: "Dot+label top-bar action button — accent for the primary command, ghost otherwise.",
+  },
 ];
 
 const TOKEN_ROWS: { name: string; light: string; dark: string }[] = [
@@ -100,7 +112,9 @@ export function NotesPage() {
                   fontSize: 12,
                 }}
               >
-                <span style={{ font: "500 11.5px/1.4 var(--mono)", color: "var(--ink)" }}>{c.k}</span>
+                <span style={{ font: "500 11.5px/1.4 var(--mono)", color: "var(--ink)" }}>
+                  {c.k}
+                </span>
                 <span style={{ color: "var(--ink-2)", lineHeight: 1.5 }}>{c.v}</span>
               </div>
             ))}
@@ -121,7 +135,13 @@ export function NotesPage() {
               >
                 Theme tokens
               </span>
-              <span style={{ marginLeft: "auto", font: "400 10.5px/1 var(--mono)", color: "var(--ink-3)" }}>
+              <span
+                style={{
+                  marginLeft: "auto",
+                  font: "400 10.5px/1 var(--mono)",
+                  color: "var(--ink-3)",
+                }}
+              >
                 light / dark
               </span>
             </>
@@ -172,7 +192,9 @@ export function NotesPage() {
               />
             </div>
           ))}
-          <div style={{ padding: "9px 12px", font: "400 11px/1.6 var(--mono)", color: "var(--ink-3)" }}>
+          <div
+            style={{ padding: "9px 12px", font: "400 11px/1.6 var(--mono)", color: "var(--ink-3)" }}
+          >
             Spacing 4/8px scale · radius 2px · 1px borders, no elevation except blades (0 0 0 1px +
             24px/-8px shadow).
           </div>

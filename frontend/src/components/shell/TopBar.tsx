@@ -66,7 +66,13 @@ export function TopBar({
           return (
             <span
               key={`${item.label}-${index}`}
-              style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, overflow: "hidden" }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                minWidth: 0,
+                overflow: "hidden",
+              }}
             >
               {index > 0 && (
                 <span aria-hidden style={{ color: "var(--line-2)", flex: "0 0 auto" }}>

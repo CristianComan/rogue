@@ -8,8 +8,7 @@
  */
 :root {
   color-scheme: light dark;
-  --sans:
-    "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --sans: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   font: 13px/1.4 var(--sans);
   font-synthesis: none;
@@ -130,7 +129,7 @@
   --mute-bd: #3a3634;
 }
 
-*{
+* {
   box-sizing: border-box;
 }
 

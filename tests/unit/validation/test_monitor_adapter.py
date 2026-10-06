@@ -68,10 +68,7 @@ async def test_capture_of_array_element_channel_includes_delay_and_phase() -> No
     plan, receivers = make_coherent_group_plan(receiver_type=ReceiverType.AOA_DOA)
     receiver = receivers[0]
     window = next(
-        w
-        for w in plan.rf_windows
-        for c in w.channels
-        if c.array_element_receiver_id == receiver.id
+        w for w in plan.rf_windows for c in w.channels if c.array_element_receiver_id == receiver.id
     )
     channel = next(c for c in window.channels if c.array_element_receiver_id == receiver.id)
     adapter = MockRfMonitorAdapter()

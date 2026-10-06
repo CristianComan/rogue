@@ -209,8 +209,9 @@ def main() -> int:
     )
     parser.add_argument("--source-root", required=True, help="path to the campaign directory")
     parser.add_argument(
-        "--campaign", default=None, help="campaign label for provenance/object keys "
-        "(defaults to the source root's basename)"
+        "--campaign",
+        default=None,
+        help="campaign label for provenance/object keys (defaults to the source root's basename)",
     )
     parser.add_argument("--api-base", default="http://localhost:8000")
     parser.add_argument(
