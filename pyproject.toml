@@ -17,7 +17,12 @@ dependencies = [
   "uvicorn[standard]>=0.30,<1.0",
   "pydantic>=2.8,<3.0",
   "pydantic-settings>=2.4,<3.0",
-  "sqlalchemy>=2.0,<3.0",
+  # The [asyncio] extra is what pulls in greenlet, which
+  # sqlalchemy.ext.asyncio imports at module load. SQLAlchemy 2.1 dropped
+  # greenlet from its base install, so a bare "sqlalchemy" pin makes every
+  # async-engine import (app startup, alembic env.py) fail on a fresh
+  # resolve. Pin the extra explicitly rather than relying on a transitive.
+  "sqlalchemy[asyncio]>=2.0,<3.0",
   "alembic>=1.13,<2.0",
   "psycopg[binary]>=3.2,<4.0",
   "geoalchemy2>=0.15,<1.0",
