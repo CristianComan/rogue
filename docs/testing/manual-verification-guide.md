@@ -633,14 +633,47 @@ bounded-chunk streaming are covered by
 only: X440 TX → fixed attenuator (sized to your analyzer/receiver's safe
 input level) → spectrum analyzer or a second SDR as receiver.
 
-If you have the hardware: `pip install .[x440]`, confirm `uhd.usrp.MultiUSRP(...)`
-against your installed UHD version matches what
-`agents/common/x440_adapter.py` expects (adjust and re-run the test above
-if not), then follow **ADR-009** for the exact `ROGUE_AGENT_MODE=x440`
-environment-variable invocation. Register the Agent, compile+run a plan,
-and confirm: real device-discovered capabilities (not the static default),
-`stop`/`emergency-stop` actually cease transmission, and `start` fails with
-`ROGUE_ENABLE_REAL_TX` unset. Report back anything that needed adjusting.
+```bash
+pip install .[x440]
+python -c "import uhd; print(uhd.__version__)"    # must succeed before anything below will
+uhd_find_devices
+```
+
+Confirm `agents/common/x440_adapter.py`'s UHD calls (`MultiUSRP`,
+`StreamArgs`, `TuneRequest`, `TXMetadata`) against your installed version —
+written against documented UHD API, not exercised against a real install:
+
+```python
+import uhd
+
+usrp = uhd.usrp.MultiUSRP("addr=<your X440's address>")
+print(usrp.get_tx_num_channels())
+print(usrp.get_tx_freq_range(0))
+```
+
+Adjust the adapter if anything doesn't match, re-run
+`pytest tests/unit/agents/test_x440_adapter.py`.
+
+Then: register a real `cf32_le` recording, compile a plan (M6, stop before
+creating a run), start the Agent —
+
+```bash
+ROGUE_AGENT_ID=x440-lab-01 ROGUE_AGENT_MODE=x440 ROGUE_AGENT_DEVICE_IDS=x440-1 \
+ROGUE_X440_DEVICE_ARGS="addr=<your X440's address>" ROGUE_ENABLE_REAL_TX=1 \
+ROGUE_NATS_URL=nats://<control-server>:4222 \
+ROGUE_S3_ENDPOINT=http://<control-server>:9000 \
+ROGUE_S3_ACCESS_KEY=rogue ROGUE_S3_SECRET_KEY=rogue_dev_password \
+python -m agents.common.main
+```
+
+— confirm it registers with real device-discovered capabilities (not the
+static default), create+arm+start a run and watch the analyzer, confirm
+`stop`/`emergency-stop` actually cease transmission, and confirm `start`
+fails with `ROGUE_ENABLE_REAL_TX` unset. Report back anything that needed
+adjusting.
+
+See also **M19** below for driving a single X440 channel by hand with no
+control plane at all, which is the easier first hardware step.
 
 ## M10 — AIR7311 adapter + live capability-based scheduling
 
