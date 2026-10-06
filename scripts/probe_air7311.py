@@ -40,8 +40,7 @@ def main() -> None:
     print(f"RX channels: {num_rx}")
 
     master_rates = dev.getMasterClockRates()
-    print(f"\nMaster clock rates available: "
-          f"{[(r.minimum(), r.maximum()) for r in master_rates]}")
+    print(f"\nMaster clock rates available: {[(r.minimum(), r.maximum()) for r in master_rates]}")
     print(f"Master clock rate (current): {dev.getMasterClockRate()}")
 
     clock_sources = dev.listClockSources()
@@ -55,27 +54,30 @@ def main() -> None:
     ):
         for ch in range(count):
             print(f"\n== {label} channel {ch} ==")
-            print(f"  antennas: {dev.listAntennas(direction, ch)} "
-                  f"(current: {dev.getAntenna(direction, ch)})")
+            print(
+                f"  antennas: {dev.listAntennas(direction, ch)} "
+                f"(current: {dev.getAntenna(direction, ch)})"
+            )
             freq_ranges = dev.getFrequencyRange(direction, ch)
-            print(f"  frequency ranges (Hz): "
-                  f"{[(r.minimum(), r.maximum()) for r in freq_ranges]}")
+            print(f"  frequency ranges (Hz): {[(r.minimum(), r.maximum()) for r in freq_ranges]}")
             rate_ranges = dev.getSampleRateRange(direction, ch)
             if rate_ranges:
-                print(f"  sample rate ranges (Sps): "
-                      f"{[(r.minimum(), r.maximum()) for r in rate_ranges]}")
+                print(
+                    f"  sample rate ranges (Sps): "
+                    f"{[(r.minimum(), r.maximum()) for r in rate_ranges]}"
+                )
             else:
                 print(f"  sample rates (discrete, Sps): {dev.listSampleRates(direction, ch)}")
             bw_ranges = dev.getBandwidthRange(direction, ch)
-            print(f"  bandwidth ranges (Hz): "
-                  f"{[(r.minimum(), r.maximum()) for r in bw_ranges]}")
+            print(f"  bandwidth ranges (Hz): {[(r.minimum(), r.maximum()) for r in bw_ranges]}")
             gain_range = dev.getGainRange(direction, ch)
-            print(f"  overall gain range (dB): "
-                  f"[{gain_range.minimum()}, {gain_range.maximum()}]")
+            print(f"  overall gain range (dB): [{gain_range.minimum()}, {gain_range.maximum()}]")
             for gain_name in dev.listGains(direction, ch):
                 gr = dev.getGainRange(direction, ch, gain_name)
-                print(f"    gain element {gain_name!r}: "
-                      f"[{gr.minimum()}, {gr.maximum()}] step={gr.step()}")
+                print(
+                    f"    gain element {gain_name!r}: "
+                    f"[{gr.minimum()}, {gr.maximum()}] step={gr.step()}"
+                )
             formats = dev.getStreamFormats(direction, ch)
             print(f"  stream formats: {formats}")
 

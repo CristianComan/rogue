@@ -37,7 +37,6 @@ WOULD do, then exits without opening a TX stream.
 from __future__ import annotations
 
 import argparse
-import sys
 
 import numpy as np
 import SoapySDR
@@ -46,29 +45,83 @@ DEFAULT_ARGS = "driver=remote,remote=192.168.68.64,remote:driver=SoapyAIRT"
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     p.add_argument("--device-args", default=DEFAULT_ARGS)
-    p.add_argument("--channel", type=int, default=0, help="TX and RX channel index (0-3); cabled 1-1/2-2/3-3/4-4 means TX ch N loops to RX ch N")
-    p.add_argument("--freq-hz", type=float, default=1.0e9, help="center frequency for both TX and RX")
-    p.add_argument("--sample-rate-hz", type=float, default=2_000_000.0, help="must fall in one of the device's discrete sample-rate ranges")
-    p.add_argument("--master-clock-hz", type=float, default=64_000_000.0, help="must be set to a value compatible with --sample-rate-hz before any channel is configured (device-enforced; see the AIR7311 clocking docs)")
-    p.add_argument("--tone-offset-hz", type=float, default=None, help="tone offset from center; default sample_rate/8, away from DC")
-    p.add_argument("--amplitude", type=float, default=0.02, help="digital full-scale fraction (0-1) of the transmitted tone")
-    p.add_argument("--num-samples", type=int, default=4_000, help="kept small by default to minimize TX-on duration for a first live attempt")
-    p.add_argument("--confirm-tx", action="store_true", help="actually key the transmitter; without this flag, configures everything and exits before TX")
+    p.add_argument(
+        "--channel",
+        type=int,
+        default=0,
+        help="TX and RX channel index (0-3); cabled 1-1/2-2/3-3/4-4 means TX ch N loops to RX ch N",
+    )
+    p.add_argument(
+        "--freq-hz",
+        type=float,
+        default=1.0e9,
+        help="center frequency for both TX and RX",
+    )
+    p.add_argument(
+        "--sample-rate-hz",
+        type=float,
+        default=2_000_000.0,
+        help="must fall in one of the device's discrete sample-rate ranges",
+    )
+    p.add_argument(
+        "--master-clock-hz",
+        type=float,
+        default=64_000_000.0,
+        help="must be set to a value compatible with --sample-rate-hz before "
+        "any channel is configured (device-enforced; see the AIR7311 "
+        "clocking docs)",
+    )
+    p.add_argument(
+        "--tone-offset-hz",
+        type=float,
+        default=None,
+        help="tone offset from center; default sample_rate/8, away from DC",
+    )
+    p.add_argument(
+        "--amplitude",
+        type=float,
+        default=0.02,
+        help="digital full-scale fraction (0-1) of the transmitted tone",
+    )
+    p.add_argument(
+        "--num-samples",
+        type=int,
+        default=4_000,
+        help="kept small by default to minimize TX-on duration for a first live attempt",
+    )
+    p.add_argument(
+        "--confirm-tx",
+        action="store_true",
+        help="actually key the transmitter; without this flag, configures "
+        "everything and exits before TX",
+    )
     return p.parse_args()
 
 
 def report_gain_floor(dev: SoapySDR.Device, direction: int, channel: int, label: str) -> float:
     gain_range = dev.getGainRange(direction, channel)
     floor_db = gain_range.minimum()
-    print(f"  {label} live gain range: [{gain_range.minimum()}, {gain_range.maximum()}] dB "
-          f"-> using floor {floor_db} dB")
+    print(
+        f"  {label} live gain range: [{gain_range.minimum()}, {gain_range.maximum()}] dB "
+        f"-> using floor {floor_db} dB"
+    )
     return floor_db
 
 
-def configure_channel(dev: SoapySDR.Device, direction: int, channel: int, freq_hz: float,
-                       rate_hz: float, gain_db: float, label: str) -> None:
+def configure_channel(
+    dev: SoapySDR.Device,
+    direction: int,
+    channel: int,
+    freq_hz: float,
+    rate_hz: float,
+    gain_db: float,
+    label: str,
+) -> None:
     dev.setSampleRate(direction, channel, rate_hz)
     dev.setFrequency(direction, channel, freq_hz)
     dev.setGain(direction, channel, gain_db)
@@ -76,13 +129,20 @@ def configure_channel(dev: SoapySDR.Device, direction: int, channel: int, freq_h
     applied_freq = dev.getFrequency(direction, channel)
     applied_gain = dev.getGain(direction, channel)
     print(f"  {label} ch{channel}: requested rate={rate_hz} freq={freq_hz} gain={gain_db} dB")
-    print(f"  {label} ch{channel}: applied   rate={applied_rate} freq={applied_freq} gain={applied_gain} dB")
+    print(
+        f"  {label} ch{channel}: applied   rate={applied_rate} "
+        f"freq={applied_freq} gain={applied_gain} dB"
+    )
     if abs(applied_rate - rate_hz) > 1.0:
-        print(f"  WARNING: applied sample rate differs from requested - "
-              f"{rate_hz} Hz is likely outside a supported discrete range for this device")
+        print(
+            f"  WARNING: applied sample rate differs from requested - "
+            f"{rate_hz} Hz is likely outside a supported discrete range for this device"
+        )
 
 
-def make_tone(num_samples: int, sample_rate_hz: float, offset_hz: float, amplitude: float) -> np.ndarray:
+def make_tone(
+    num_samples: int, sample_rate_hz: float, offset_hz: float, amplitude: float
+) -> np.ndarray:
     t = np.arange(num_samples) / sample_rate_hz
     tone = amplitude * np.exp(2j * np.pi * offset_hz * t)
     return tone.astype(np.complex64)
@@ -101,18 +161,24 @@ def analyze_capture(samples: np.ndarray, sample_rate_hz: float, expected_offset_
     print(f"  peak = {peak:.4f} ({peak_dbfs:.1f} dBFS), rms = {rms:.4f} ({rms_dbfs:.1f} dBFS)")
     print(f"  clipped samples (>=0.999 full scale): {clipped}")
     if clipped > 0:
-        print("  WARNING: clipping detected even at the gain floor - do not raise gain; "
-              "add a physical inline attenuator before any further testing.")
+        print(
+            "  WARNING: clipping detected even at the gain floor - do not raise gain; "
+            "add a physical inline attenuator before any further testing."
+        )
 
     spectrum = np.fft.fftshift(np.fft.fft(samples))
     freqs = np.fft.fftshift(np.fft.fftfreq(samples.size, d=1.0 / sample_rate_hz))
     peak_bin = int(np.argmax(np.abs(spectrum)))
     measured_offset_hz = float(freqs[peak_bin])
-    print(f"  strongest FFT bin at {measured_offset_hz:,.0f} Hz offset "
-          f"(expected ~{expected_offset_hz:,.0f} Hz)")
+    print(
+        f"  strongest FFT bin at {measured_offset_hz:,.0f} Hz offset "
+        f"(expected ~{expected_offset_hz:,.0f} Hz)"
+    )
     if abs(measured_offset_hz - expected_offset_hz) > sample_rate_hz * 0.02:
-        print("  WARNING: measured tone offset does not match what was transmitted - "
-              "check channel mapping / cabling (is this really TX{ch}->RX{ch}?).")
+        print(
+            "  WARNING: measured tone offset does not match what was transmitted - "
+            "check channel mapping / cabling (is this really TX{ch}->RX{ch}?)."
+        )
     else:
         print("  Tone recovered at the expected offset - loopback path confirmed.")
 
@@ -124,7 +190,7 @@ def main() -> None:
     print(f"Connecting with device args: {args.device_args}\n")
     dev = SoapySDR.Device(args.device_args)
 
-    print(f"== Master clock rate (must be set while idle, before any channel config) ==")
+    print("== Master clock rate (must be set while idle, before any channel config) ==")
     dev.setMasterClockRate(args.master_clock_hz)
     applied_mcr = dev.getMasterClockRate()
     print(f"  requested {args.master_clock_hz:,.0f} Hz, applied {applied_mcr:,.0f} Hz")
@@ -133,22 +199,40 @@ def main() -> None:
 
     print("\n== RX setup (started before TX, so it is already listening) ==")
     rx_floor_db = report_gain_floor(dev, SoapySDR.SOAPY_SDR_RX, args.channel, "RX")
-    configure_channel(dev, SoapySDR.SOAPY_SDR_RX, args.channel, args.freq_hz,
-                       args.sample_rate_hz, rx_floor_db, "RX")
+    configure_channel(
+        dev,
+        SoapySDR.SOAPY_SDR_RX,
+        args.channel,
+        args.freq_hz,
+        args.sample_rate_hz,
+        rx_floor_db,
+        "RX",
+    )
 
     print("\n== TX setup ==")
     tx_floor_db = report_gain_floor(dev, SoapySDR.SOAPY_SDR_TX, args.channel, "TX")
-    configure_channel(dev, SoapySDR.SOAPY_SDR_TX, args.channel, args.freq_hz,
-                       args.sample_rate_hz, tx_floor_db, "TX")
+    configure_channel(
+        dev,
+        SoapySDR.SOAPY_SDR_TX,
+        args.channel,
+        args.freq_hz,
+        args.sample_rate_hz,
+        tx_floor_db,
+        "TX",
+    )
 
     tone = make_tone(args.num_samples, args.sample_rate_hz, offset_hz, args.amplitude)
-    print(f"\nGenerated tone: {args.num_samples} samples, offset {offset_hz:,.0f} Hz, "
-          f"amplitude {args.amplitude} full-scale")
+    print(
+        f"\nGenerated tone: {args.num_samples} samples, offset {offset_hz:,.0f} Hz, "
+        f"amplitude {args.amplitude} full-scale"
+    )
 
     if not args.confirm_tx:
-        print("\n--confirm-tx not given. Everything above is configured on the live device "
-              "(gain/freq/rate are now set) but no stream was opened and no TX was keyed. "
-              "Re-run with --confirm-tx to actually transmit and capture.")
+        print(
+            "\n--confirm-tx not given. Everything above is configured on the live device "
+            "(gain/freq/rate are now set) but no stream was opened and no TX was keyed. "
+            "Re-run with --confirm-tx to actually transmit and capture."
+        )
         return
 
     # Every blocking SoapySDR call below gets an explicit, finite timeoutUs -
@@ -170,13 +254,18 @@ def main() -> None:
         try:
             dev.activateStream(tx_stream)
             tx_result = dev.writeStream(
-                tx_stream, [tone], tone.size,
-                flags=SoapySDR.SOAPY_SDR_END_BURST, timeoutUs=write_timeout_us,
+                tx_stream,
+                [tone],
+                tone.size,
+                flags=SoapySDR.SOAPY_SDR_END_BURST,
+                timeoutUs=write_timeout_us,
             )
             print(f"  writeStream result: ret={tx_result.ret} flags={tx_result.flags}")
             if tx_result.ret < 0:
-                print(f"  WARNING: writeStream did not report full success "
-                      f"(requested {tone.size} samples) - treat this capture as unreliable.")
+                print(
+                    f"  WARNING: writeStream did not report full success "
+                    f"(requested {tone.size} samples) - treat this capture as unreliable."
+                )
         finally:
             dev.deactivateStream(tx_stream)
             dev.closeStream(tx_stream)
