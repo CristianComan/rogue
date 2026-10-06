@@ -926,6 +926,7 @@ you start against it changes.
 # save as /tmp/run_m20_local_replay.py
 """Drives one full reserve->preflight->configure->arm->start->stop cycle
 against an Agent's local command API with no control plane involved."""
+
 import argparse, hashlib, json, struct, sys, time, uuid
 from pathlib import Path
 import httpx
@@ -934,7 +935,9 @@ import httpx
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--base-url", default="http://127.0.0.1:8600")
-    p.add_argument("--local-root", required=True, help="must match ROGUE_AGENT_LOCAL_RECORDING_ROOT")
+    p.add_argument(
+        "--local-root", required=True, help="must match ROGUE_AGENT_LOCAL_RECORDING_ROOT"
+    )
     p.add_argument("--device-id", default="air7311-1")
     p.add_argument("--channel", type=int, default=0)
     p.add_argument("--freq-hz", type=float, default=2.45e9)
@@ -945,8 +948,11 @@ def parse_args():
 
 def write_local_recording(local_root: Path, recording_id: str, version: int = 1) -> str:
     samples = b"".join(struct.pack("<ff", 0.001 * i, -0.001 * i) for i in range(2000))
-    meta = {"global": {"core:datatype": "cf32_le", "core:sample_rate": 2_000_000},
-            "captures": [{"core:sample_start": 0, "core:frequency": 2_450_000_000}], "annotations": []}
+    meta = {
+        "global": {"core:datatype": "cf32_le", "core:sample_rate": 2_000_000},
+        "captures": [{"core:sample_start": 0, "core:frequency": 2_450_000_000}],
+        "annotations": [],
+    }
     local_root.mkdir(parents=True, exist_ok=True)
     (local_root / f"{recording_id}.v{version}.sigmf-meta").write_text(json.dumps(meta))
     (local_root / f"{recording_id}.v{version}.sigmf-data").write_bytes(samples)
@@ -966,8 +972,14 @@ def main() -> None:
     def send(kind: str, **fields) -> dict:
         nonlocal seq
         seq += 1
-        body = {"correlation_id": str(uuid.uuid4()), "sequence": seq, "kind": kind,
-                "device_id": args.device_id, "channel_index": args.channel, **fields}
+        body = {
+            "correlation_id": str(uuid.uuid4()),
+            "sequence": seq,
+            "kind": kind,
+            "device_id": args.device_id,
+            "channel_index": args.channel,
+            **fields,
+        }
         ack = client.post("/commands", json=body).json()
         print(f"{kind}: accepted={ack['accepted']} error={ack.get('error')}")
         if not ack["accepted"]:
@@ -975,12 +987,23 @@ def main() -> None:
         return ack
 
     send("reserve", run_id=str(uuid.uuid4()), lease_ttl_seconds=60.0)
-    window = {"id": str(uuid.uuid4()), "window_key": "w1", "start_seconds": 0.0,
-              "end_seconds": args.duration_s, "center_frequency_hz": args.freq_hz,
-              "bandwidth_hz": args.bandwidth_hz, "channels": []}
-    recording_ref = {"recording_id": recording_id, "version": 1,
-                      "metadata_object_key": "unused-in-local-mode", "data_object_key": "unused-in-local-mode",
-                      "sha256_metadata": "0" * 64, "sha256_data": sha256_data}
+    window = {
+        "id": str(uuid.uuid4()),
+        "window_key": "w1",
+        "start_seconds": 0.0,
+        "end_seconds": args.duration_s,
+        "center_frequency_hz": args.freq_hz,
+        "bandwidth_hz": args.bandwidth_hz,
+        "channels": [],
+    }
+    recording_ref = {
+        "recording_id": recording_id,
+        "version": 1,
+        "metadata_object_key": "unused-in-local-mode",
+        "data_object_key": "unused-in-local-mode",
+        "sha256_metadata": "0" * 64,
+        "sha256_data": sha256_data,
+    }
     send("preflight", window=window, recordings=[recording_ref])
     send("configure", window=window)
     send("arm", start_at_seconds=0.0)
