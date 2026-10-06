@@ -1,0 +1,11 @@
+# Synthetic example catalog, used only by the test suite — no real
+# recordings in this repo (replay_cli/CLAUDE.md's own convention).
+alpha:
+  variants:
+    drone:
+      meta: recordings/alpha/drone.sigmf-meta
+    controller:
+      meta: recordings/alpha/controller.sigmf-meta
+    both:
+      meta: recordings/alpha/both.sigmf-meta
+  notes: synthetic example fixture

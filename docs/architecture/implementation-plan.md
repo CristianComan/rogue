@@ -28,6 +28,8 @@ Build ROGUE in bounded, testable increments. Do not begin with hardware-specific
 | M16 | Zone-trigger compiler integration | `zone_trigger` emissions resolve to real `RfWindow`/`CompositeChannel` output; `observed_by_receiver_id` survives into `CompositeChannel` | Done — `feature/zone-trigger-compiler-integration` — see ADR-016 |
 | M17 | Zone-trigger overlap detection (partial) | The two statically-provable `zone_trigger` overlap cases are BLOCKING findings | Done — `feature/zone-trigger-overlap-detection`; cross-zone geometric overlap closed in M18, zone-trigger-vs-manually-timed overlap still open — see ADR-017 |
 | M18 | Zone polygon-overlap detection | Two zone_trigger emissions on the same link with spatially-overlapping zones produce a WARNING | Done — `feature/zone-polygon-overlap-detection`; zone-trigger-vs-manually-timed overlap still needs a validation-time duration_s, not attempted — see ADR-018 |
+| M19 | Manual replay CLI | A backend-free CLI manually drives one real SDR channel (reserve/preflight/configure/arm/start/stop) from a local SigMF recording and a YAML config | Done — `feature/m19-manual-replay-cli`; not itself hardware-verified — see ADR-019 |
+| — | `replay_cli/` SigMF Drone Replay Tool | Scenario+catalog compile to one composite SigMF file, then play on AIR-T 7311/7201 (X440 deferred) | Done through AIR-T play — see `replay_cli/CLAUDE.md`; supplemental, not in the original CLAUDE.md M-sequence, and intentionally independent of the `rogue`/`agents` packages (own `pyproject.toml`/venv) — not the same tool as M19's `rogue-manual-replay`, see ADR-019's note on the distinction |
 
 ## 3. Feature sequence
 
@@ -638,6 +640,34 @@ Backend domain test suite grew by 9 tests: `test_geometry.py` (+7:
 identical/edge-touching/vertex-touching/3D-coordinate cases) and `test_validation.py`
 (+2, plus corrected assertions on one existing test whose comment predated this
 primitive). `ruff`/`mypy` both pass. No API, compiler or frontend changes.
+
+### M19 — Manual replay CLI (code complete, hardware-unverified)
+
+Branch `feature/m19-manual-replay-cli`, based on `develop` after M18. See ADR-019 for
+the full scope record — summary below.
+
+Driven by the user having real hardware for the first time (an X440 plus three
+SoapySDR-native Deepwave AIR-T units — AIR7311, AIR7201, AIR8201 — on RF loopback) and
+wanting bring-up without standing up the full backend. `agents/cli/manual_replay.py`
+(+ `agents/cli/config.py`, new `rogue-manual-replay` console script) is a standalone,
+backend-free package (no Postgres/MinIO/NATS/scenario) that builds a real
+`EttusX440Adapter`/`DeepwaveAIR7311Adapter` directly from a YAML config and a local
+`.sigmf-data`/`.sigmf-meta` pair — the same `SDRAdapter` protocol and real M9/M10
+adapter code the distributed Agent uses, not a shim. Two entrypoints — `run` (one-shot,
+scriptable) and `interactive` (a live session for step-by-step bench control) — because
+`StreamingSDRAdapter` state doesn't survive a process exit. AIR7201/AIR8201 reuse the
+existing `air7311` device family unchanged (confirmed with the user: same SoapySDR
+adapter, different `device_args` driver string). Local files only, no catalogue
+integration. See ADR-019 for the staging mechanism (symlink, not copy), the synthetic
+`RfWindow` it builds, and a known pre-existing gain-policy limitation carried over from
+M9 unchanged.
+
+New `tests/unit/agents/test_manual_replay_cli.py` (12 tests, fake device seam, no real
+hardware). `ruff`/`mypy --strict` pass; full suite otherwise unaffected (390 passed, 1
+skipped, 104 pre-existing Postgres-unavailable errors in `tests/unit/persistence/*`,
+environmental — no local Postgres here, unrelated to this change). Not itself
+hardware-verified — `docs/testing/manual-verification-guide.md` gained an M19 section
+with worked X440/AIR7311/AIR7201/AIR8201 examples for the user's bench.
 
 ## 4. Git workflow
 

@@ -139,6 +139,16 @@ exist (M9/M10); until then, bare-metal hosts can run the same
 presence-only agent the simulated container runs, which is useful for
 validating lab network reachability before adapter code exists.
 
+### Manual bring-up (M19)
+
+Before standing up the long-running systemd Agent above, `rogue-manual-
+replay` (`agents/cli/manual_replay.py`, ADR-019) drives one channel by
+hand from the same `pip install` — no NATS/MinIO/Postgres, no scenario,
+just a local SigMF recording and a small YAML config. Useful for initial
+hardware/RF-loopback checkout on a host before it's wired into the
+control plane. See `docs/testing/manual-verification-guide.md`'s M19
+section for the worked commands.
+
 ### Network prerequisites
 
 The Agent host must reach the control server's NATS port (`4222`) and

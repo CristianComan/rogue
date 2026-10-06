@@ -36,6 +36,12 @@ dependencies = [
   "numpy>=2.0,<3.0"
 ]
 
+# Standalone, backend-free manual-replay CLI (M19, ADR-019) — bare-metal
+# Agent hosts (ADR-004) install this the same way as the rest of the
+# package; needs no extra dependency beyond what's already above.
+[project.scripts]
+rogue-manual-replay = "agents.cli.manual_replay:main"
+
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3,<9.0",
